@@ -102,29 +102,41 @@ impl Parser<LispVal> for LispExprParser {
     }
 }
 
-//#[derive(Clone, Debug)]
-//pub enum Paren {
-//    Par(Box<Paren>),
-//    Non,
-//}
-//
-//pub fn parser_paren() -> ParserParen {
-//    ParserParen {}
-//}
-//
-//#[derive(Clone)]
-//pub struct ParserParen {
-//}
-//
-//impl Parser<Paren> for ParserParen
-//{
-//    fn parse<'a, 'b>(&'a self, source: &'b str) -> Res<'b, Paren> {
-//        pchar('(')
-//            .next(self.clone())
-//            .fmap(Box::new)
-//            .fmap(Paren::Par)
-//            .prev(pchar(')'))
-//            .or(pure(Paren::Non))
-//            .parse(source)
-//    }
-//}
+pub fn show_val(val: &LispVal) -> OwnedString {
+    match val {
+        String(contents)=>
+            "\"".chars().chain(contents.chars()).chain("\"".chars()).collect(),
+        Atom(name) =>
+            (*name).clone(),
+        Number(contents) =>
+            format!("{}", contents).to_owned(),
+        Bool(true) =>
+            "#t".to_owned(),
+        Bool(false) =>
+            "#f".to_owned(),
+        List(items) =>
+            "(".chars()
+                .chain(items
+                    .into_iter()
+                    .map(show_val)
+                    .collect::<Vec<OwnedString>>()
+                    .join(" ")
+                    .chars()
+                )
+                .chain(")".chars())
+                .collect(),
+        DottedList(head, tail) =>
+            "(".chars()
+                .chain(head
+                        .into_iter()
+                        .map(show_val)
+                        .collect::<Vec<OwnedString>>()
+                        .join(" ")
+                        .chars()
+                )
+                .chain(" . ".chars())
+                .chain(show_val(tail).chars())
+                .chain(")".chars())
+                .collect(),
+    }
+}
