@@ -2,7 +2,7 @@ use crate::parse::*;
 
 type OwnedString = std::string::String;
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum LispVal {
     Atom(OwnedString),
     List(Vec<LispVal>),
@@ -102,6 +102,14 @@ impl Parser<LispVal> for LispExprParser {
     }
 }
 
+fn lispvals_to_string(items: &Vec<LispVal>) -> OwnedString {
+    items
+        .into_iter()
+        .map(show_val)
+        .collect::<Vec<OwnedString>>()
+        .join(" ")
+}
+
 pub fn show_val(val: &LispVal) -> OwnedString {
     match val {
         String(contents)=>
@@ -116,27 +124,50 @@ pub fn show_val(val: &LispVal) -> OwnedString {
             "#f".to_owned(),
         List(items) =>
             "(".chars()
-                .chain(items
-                    .into_iter()
-                    .map(show_val)
-                    .collect::<Vec<OwnedString>>()
-                    .join(" ")
+                .chain(
+                    lispvals_to_string(items)
                     .chars()
                 )
                 .chain(")".chars())
                 .collect(),
         DottedList(head, tail) =>
             "(".chars()
-                .chain(head
-                        .into_iter()
-                        .map(show_val)
-                        .collect::<Vec<OwnedString>>()
-                        .join(" ")
+                .chain(
+                    lispvals_to_string(head)
                         .chars()
                 )
                 .chain(" . ".chars())
                 .chain(show_val(tail).chars())
                 .chain(")".chars())
                 .collect(),
+    }
+}
+
+pub fn eval(val: LispVal) -> LispVal {
+    match val {
+        String(_) =>
+            val,
+        Number(_) =>
+            val,
+        Bool(_) =>
+            val,
+        List(items) =>
+            match items.split_first() {
+                Some((func, rest)) =>
+                    if *func == Atom("quote".to_owned()) {
+                        match rest.split_first() {
+                            Some((x, [])) => x.clone(),
+                            _ => unimplemented!()
+                        }
+                    } else {
+                        unimplemented!()
+                    },
+                _ =>
+                    unimplemented!(),
+            },
+        Atom(_name) =>
+            unimplemented!(),
+        DottedList(_head, _tail) =>
+            unimplemented!(),
     }
 }
