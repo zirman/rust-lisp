@@ -112,62 +112,49 @@ fn lispvals_to_string(items: &Vec<LispVal>) -> OwnedString {
 
 pub fn show_val(val: &LispVal) -> OwnedString {
     match val {
-        String(contents)=>
-            "\"".chars().chain(contents.chars()).chain("\"".chars()).collect(),
-        Atom(name) =>
-            (*name).clone(),
-        Number(contents) =>
-            format!("{}", contents).to_owned(),
-        Bool(true) =>
-            "#t".to_owned(),
-        Bool(false) =>
-            "#f".to_owned(),
-        List(items) =>
-            "(".chars()
-                .chain(
-                    lispvals_to_string(items)
-                    .chars()
-                )
-                .chain(")".chars())
-                .collect(),
-        DottedList(head, tail) =>
-            "(".chars()
-                .chain(
-                    lispvals_to_string(head)
-                        .chars()
-                )
-                .chain(" . ".chars())
-                .chain(show_val(tail).chars())
-                .chain(")".chars())
-                .collect(),
+        String(contents) => "\""
+            .chars()
+            .chain(contents.chars())
+            .chain("\"".chars())
+            .collect(),
+        Atom(name) => (*name).clone(),
+        Number(contents) => format!("{}", contents).to_owned(),
+        Bool(true) => "#t".to_owned(),
+        Bool(false) => "#f".to_owned(),
+        List(items) => "("
+            .chars()
+            .chain(lispvals_to_string(items).chars())
+            .chain(")".chars())
+            .collect(),
+        DottedList(head, tail) => "("
+            .chars()
+            .chain(lispvals_to_string(head).chars())
+            .chain(" . ".chars())
+            .chain(show_val(tail).chars())
+            .chain(")".chars())
+            .collect(),
     }
 }
 
 pub fn eval(val: LispVal) -> LispVal {
     match val {
-        String(_) =>
-            val,
-        Number(_) =>
-            val,
-        Bool(_) =>
-            val,
-        List(items) =>
-            match items.split_first() {
-                Some((func, rest)) =>
-                    if *func == Atom("quote".to_owned()) {
-                        match rest.split_first() {
-                            Some((x, [])) => x.clone(),
-                            _ => unimplemented!()
-                        }
-                    } else {
-                        unimplemented!()
-                    },
-                _ =>
-                    unimplemented!(),
-            },
-        Atom(_name) =>
-            unimplemented!(),
-        DottedList(_head, _tail) =>
-            unimplemented!(),
+        String(_) => val,
+        Number(_) => val,
+        Bool(_) => val,
+        List(items) => match items.split_first() {
+            Some((func, rest)) => {
+                if *func == Atom("quote".to_owned()) {
+                    match rest.split_first() {
+                        Some((x, [])) => x.clone(),
+                        _ => unimplemented!(),
+                    }
+                } else {
+                    unimplemented!()
+                }
+            }
+            _ => unimplemented!(),
+        },
+        Atom(_name) => unimplemented!(),
+        DottedList(_head, _tail) => unimplemented!(),
     }
 }
