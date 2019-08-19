@@ -1,4 +1,5 @@
-//use crate::lisp::parse_atom;
+#[macro_use]
+extern crate lazy_static;
 
 mod lisp;
 mod parse;
@@ -12,7 +13,7 @@ fn unwrap(x: Res<LispVal>) -> LispVal {
     x.unwrap_or_else(|_| unimplemented!()).0
 }
 
-trait Bind<R, F, A, B>
+pub trait Bind<R, F, A, B>
 where
     F: Fn(A) -> R,
 {
@@ -83,9 +84,9 @@ fn main() {
                         Err(Errors::Parse(rest.to_owned()))
                     }
                 })
-                .map(|x| eval(x))
+                .map(|x| eval(&x))
         }) {
-            Ok(x) => println!("{:?}", x),
+            Ok(x) => println!("{}", show_val(&x)),
             Err(e) => println!("Error: {:?}", e),
         }
     }

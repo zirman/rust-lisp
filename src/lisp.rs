@@ -12,6 +12,8 @@ pub enum LispVal {
     Bool(bool),
 }
 
+use crate::Bind;
+use std::collections::HashMap;
 use LispVal::*;
 
 pub fn letter() -> impl Parser<char> {
@@ -136,25 +138,77 @@ pub fn show_val(val: &LispVal) -> OwnedString {
     }
 }
 
-pub fn eval(val: LispVal) -> LispVal {
+pub fn eval(val: &LispVal) -> LispVal {
     match val {
-        String(_) => val,
-        Number(_) => val,
-        Bool(_) => val,
-        List(items) => match items.split_first() {
-            Some((func, rest)) => {
-                if *func == Atom("quote".to_owned()) {
-                    match rest.split_first() {
-                        Some((x, [])) => x.clone(),
+        String(_) => val.clone(),
+        Number(_) => val.clone(),
+        Bool(_) => val.clone(),
+        List(items) => {
+            match items.split_first() {
+                Some((func, rest)) => {
+                    match func {
+                        Atom(x) =>
+                            match x.as_ref() {
+                                "quote" =>
+                                    match rest.split_first() {
+                                        Some((x, [])) => x.clone(),
+                                        _ => unimplemented!(),
+                                    },
+                                func =>
+                                    apply(
+                                        func,
+                                        &rest.iter().map(eval).collect::<Vec<LispVal>>()
+                                    )
+                                ,
+                            },
                         _ => unimplemented!(),
                     }
-                } else {
-                    unimplemented!()
                 }
+                _ => unimplemented!(),
             }
-            _ => unimplemented!(),
         },
-        Atom(_name) => unimplemented!(),
+        Atom(name) => unimplemented!(),
         DottedList(_head, _tail) => unimplemented!(),
     }
+}
+
+struct BinOp(Box<dyn Fn(i64, i64) -> i64 + Sync>);
+
+lazy_static! {
+    static ref PRIMITIVES: HashMap<&'static str, BinOp> = {
+        let mut m = HashMap::new();
+        m.insert("+", BinOp(Box::new(|x, y| x + y)));
+        m.insert("-", BinOp(Box::new(|x, y| x - y)));
+        m.insert("*", BinOp(Box::new(|x, y| x * y)));
+        m.insert("/", BinOp(Box::new(|x, y| x / y)));
+        m.insert("mod", BinOp(Box::new(|x, y| x % y)));
+        m.insert("quotient", BinOp(Box::new(|x, y| x / y)));
+        m.insert("remainder", BinOp(Box::new(|x, y| x % y)));
+        m
+    };
+}
+
+pub fn apply(s: &str, ls: &Vec<LispVal>) -> LispVal {
+    (PRIMITIVES.get(s) as Option<&BinOp>)
+        .bind(|f| {
+            if ls.len() == 2 {
+                ls.get(0)
+                    .bind(|x| match x {
+                        Number(x) => Some(x),
+                        _ => None,
+                    })
+                    .bind(|x| {
+                        ls.get(1)
+                            .bind(|x| match x {
+                                Number(x) => Some(x),
+                                _ => None,
+                            })
+                            .map(|y| f.0(*x, *y))
+                    })
+            } else {
+                None
+            }
+        })
+        .map(Number)
+        .unwrap()
 }
