@@ -249,17 +249,17 @@ lazy_static! {
 
 pub fn apply(s: &str, ls: &Vec<LispVal>) -> ThrowsError<LispVal> {
     (PRIMITIVES.get(s) as Option<&BinOp>)
-        .ok_or(LispError::NotFunction("Unrecognized primitive function args", s.to_owned()))
+        .ok_or(LispError::NotFunction(
+            "Unrecognized primitive function args",
+            s.to_owned(),
+        ))
         .bind(|f| numeric_bin_op(f, ls))
 }
 
 fn numeric_bin_op(bin_op: &BinOp, ls: &Vec<LispVal>) -> ThrowsError<LispVal> {
     if ls.len() == 2 {
         unpack_num(ls.get(0).unwrap())
-            .bind(|x|
-                unpack_num(ls.get(1).unwrap())
-                    .bind(|y| Ok(Number(bin_op.0(x, y))))
-            )
+            .bind(|x| unpack_num(ls.get(1).unwrap()).bind(|y| Ok(Number(bin_op.0(x, y)))))
     } else {
         Err(NumArgs(2 as u8, ls.clone()))
     }
@@ -269,5 +269,12 @@ fn unpack_num(lispval: &LispVal) -> ThrowsError<i64> {
     match lispval {
         Number(x) => Ok(x.clone()),
         not_num => Err(TypeMismatch("number", not_num.clone())),
+    }
+}
+
+pub fn trap_error(action: ThrowsError<OwnedString>) -> ThrowsError<OwnedString> {
+    match action {
+        Ok(x) => Ok(x),
+        Err(y) => Ok(show_error(y)),
     }
 }

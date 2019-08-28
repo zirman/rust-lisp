@@ -86,7 +86,7 @@ fn main() {
                 })
                 .map(|x| eval(&x))
         }) {
-            Ok(x) => println!("{}", show_val(&extract_value(x))),
+            Ok(x) => println!("{}", &extract_value(trap_error(x.map(|z| show_val(&z))))),
             Err(e) => println!("Error: {:?}", e),
         }
     }
