@@ -2,7 +2,7 @@ use crate::parse::*;
 
 type OwnedString = std::string::String;
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LispVal {
     Atom(OwnedString),
     List(Vec<LispVal>),
@@ -10,6 +10,69 @@ pub enum LispVal {
     Number(i64),
     String(OwnedString),
     Bool(bool),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum LispError {
+    NumArgs(u8, Vec<LispVal>),
+    TypeMismatch(&'static str, LispVal),
+    ParseError(OwnedString),
+    BadSpecialForm(OwnedString, LispVal),
+    NotFunction(&'static str, OwnedString),
+    UnboundVar(OwnedString, OwnedString),
+    Default(OwnedString),
+}
+
+use LispError::*;
+
+type ThrowsError<A> = Result<A, LispError>;
+
+pub fn extract_value<A>(throws_error: ThrowsError<A>) -> A {
+    throws_error.expect("")
+}
+
+fn read_expr(source: &str) -> ThrowsError<LispVal> {
+    match expr().parse(source) {
+        Ok((x, y)) => Ok(x),
+        Err(y) => Err(ParseError(y.to_owned())),
+    }
+}
+
+fn show_error(error: LispError) -> OwnedString {
+    match error {
+        NumArgs(expected, found) => "Expected "
+            .chars()
+            .chain(format!("{}", expected).chars())
+            .chain(" args; found values ".chars())
+            .chain(lispvals_to_string(&found).chars())
+            .collect::<OwnedString>(),
+        TypeMismatch(expected, found) => "Invalid type: expected "
+            .chars()
+            .chain(expected.chars())
+            .chain(", found ".chars())
+            .chain(show_val(&found).chars())
+            .collect::<OwnedString>(),
+        ParseError(parse_err) => "Parse error at "
+            .chars()
+            .chain(parse_err.chars())
+            .collect::<OwnedString>(),
+        BadSpecialForm(message, form) => message
+            .chars()
+            .chain(": ".chars())
+            .chain(show_val(&form).chars())
+            .collect::<OwnedString>(),
+        NotFunction(message, func) => message
+            .chars()
+            .chain(": ".chars())
+            .chain(func.chars())
+            .collect::<OwnedString>(),
+        UnboundVar(message, var_name) => message
+            .chars()
+            .chain(": ".chars())
+            .chain(var_name.chars())
+            .collect::<OwnedString>(),
+        Default(_) => "".to_owned(),
+    }
 }
 
 use crate::Bind;
@@ -138,34 +201,30 @@ pub fn show_val(val: &LispVal) -> OwnedString {
     }
 }
 
-pub fn eval(val: &LispVal) -> LispVal {
+pub fn eval(val: &LispVal) -> ThrowsError<LispVal> {
     match val {
-        String(_) => val.clone(),
-        Number(_) => val.clone(),
-        Bool(_) => val.clone(),
-        List(items) => {
-            match items.split_first() {
-                Some((func, rest)) => {
-                    match func {
-                        Atom(x) =>
-                            match x.as_ref() {
-                                "quote" =>
-                                    match rest.split_first() {
-                                        Some((x, [])) => x.clone(),
-                                        _ => unimplemented!(),
-                                    },
-                                func =>
-                                    apply(
-                                        func,
-                                        &rest.iter().map(eval).collect::<Vec<LispVal>>()
-                                    )
-                                ,
-                            },
+        String(_) => Ok(val.clone()),
+        Number(_) => Ok(val.clone()),
+        Bool(_) => Ok(val.clone()),
+        List(items) => match items.split_first() {
+            Some((func, rest)) => match func {
+                Atom(x) => match x.as_ref() {
+                    "quote" => match rest.split_first() {
+                        Some((x, [])) => Ok(x.clone()),
                         _ => unimplemented!(),
-                    }
-                }
+                    },
+                    func => apply(
+                        func,
+                        &rest
+                            .iter()
+                            .map(eval)
+                            .map(extract_value)
+                            .collect::<Vec<LispVal>>(),
+                    ),
+                },
                 _ => unimplemented!(),
-            }
+            },
+            _ => unimplemented!(),
         },
         Atom(name) => unimplemented!(),
         DottedList(_head, _tail) => unimplemented!(),
@@ -188,27 +247,27 @@ lazy_static! {
     };
 }
 
-pub fn apply(s: &str, ls: &Vec<LispVal>) -> LispVal {
+pub fn apply(s: &str, ls: &Vec<LispVal>) -> ThrowsError<LispVal> {
     (PRIMITIVES.get(s) as Option<&BinOp>)
-        .bind(|f| {
-            if ls.len() == 2 {
-                ls.get(0)
-                    .bind(|x| match x {
-                        Number(x) => Some(x),
-                        _ => None,
-                    })
-                    .bind(|x| {
-                        ls.get(1)
-                            .bind(|x| match x {
-                                Number(x) => Some(x),
-                                _ => None,
-                            })
-                            .map(|y| f.0(*x, *y))
-                    })
-            } else {
-                None
-            }
-        })
-        .map(Number)
-        .unwrap()
+        .ok_or(LispError::NotFunction("Unrecognized primitive function args", s.to_owned()))
+        .bind(|f| numeric_bin_op(f, ls))
+}
+
+fn numeric_bin_op(bin_op: &BinOp, ls: &Vec<LispVal>) -> ThrowsError<LispVal> {
+    if ls.len() == 2 {
+        unpack_num(ls.get(0).unwrap())
+            .bind(|x|
+                unpack_num(ls.get(1).unwrap())
+                    .bind(|y| Ok(Number(bin_op.0(x, y))))
+            )
+    } else {
+        Err(NumArgs(2 as u8, ls.clone()))
+    }
+}
+
+fn unpack_num(lispval: &LispVal) -> ThrowsError<i64> {
+    match lispval {
+        Number(x) => Ok(x.clone()),
+        not_num => Err(TypeMismatch("number", not_num.clone())),
+    }
 }
