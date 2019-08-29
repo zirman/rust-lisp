@@ -9,9 +9,9 @@ use parse::*;
 
 use std::io::{self, BufRead, Error};
 
-fn unwrap(x: Res<LispVal>) -> LispVal {
-    x.unwrap_or_else(|_| unimplemented!()).0
-}
+//fn unwrap(x: Res<LispVal>) -> LispVal {
+//    x.unwrap_or_else(|_| unimplemented!()).0
+//}
 
 pub trait Bind<R, F, A, B>
 where

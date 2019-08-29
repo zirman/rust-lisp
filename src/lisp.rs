@@ -6,7 +6,7 @@ type OwnedString = std::string::String;
 pub enum LispVal {
     Atom(OwnedString),
     List(Vec<LispVal>),
-    DottedList(Vec<LispVal>, Box<LispVal>),
+    DottedList(Box<LispVal>, Box<LispVal>),
     Number(i64),
     String(OwnedString),
     Bool(bool),
@@ -34,7 +34,7 @@ pub fn extract_value<A>(throws_error: ThrowsError<A>) -> A {
 
 fn read_expr(source: &str) -> ThrowsError<LispVal> {
     match expr().parse(source) {
-        Ok((x, y)) => Ok(x),
+        Ok((x, _)) => Ok(x),
         Err(y) => Err(ParseError(y.to_owned())),
     }
 }
@@ -80,7 +80,6 @@ fn show_error(error: LispError) -> OwnedString {
 use crate::Bind;
 use std::collections::HashMap;
 use LispVal::*;
-use std::marker::PhantomData;
 
 pub fn letter() -> impl Parser<char> {
     predicate(|c| c.is_alphabetic())
@@ -137,13 +136,14 @@ pub fn list() -> impl Parser<LispVal> {
 }
 
 pub fn dotted_list() -> impl Parser<LispVal> {
-    end_by(expr(), spaces()).bind(|head| {
-        pchar('.')
+    expr().bind(|head|
+        spaces()
+            .next(pchar('.'))
             .next(spaces())
             .next(expr())
             .fmap(Box::new)
-            .fmap(move |tail| DottedList(head.clone(), tail))
-    })
+            .fmap(move |tail| DottedList(Box::new(head.clone()), tail))
+    )
 }
 
 pub fn quoted() -> impl Parser<LispVal> {
@@ -196,7 +196,7 @@ pub fn show_val(val: &LispVal) -> OwnedString {
             .collect(),
         DottedList(head, tail) => "("
             .chars()
-            .chain(lispvals_to_string(head).chars())
+            .chain(show_val(head).chars())
             .chain(" . ".chars())
             .chain(show_val(tail).chars())
             .chain(")".chars())
@@ -212,10 +212,31 @@ pub fn eval(val: &LispVal) -> ThrowsError<LispVal> {
         List(items) => match items.split_first() {
             Some((func, rest)) => match func {
                 Atom(x) => match x.as_ref() {
-                    "quote" => match rest.split_first() {
-                        Some((x, [])) => Ok(x.clone()),
-                        _ => unimplemented!(),
-                    },
+                    "quote" => {
+                        if rest.len() == 1 {
+                            Ok(rest[0].clone())
+                        } else {
+                            unimplemented!()
+                        }
+                    }
+                    "if" => {
+                        if rest.len() == 3 {
+                            eval(&rest[0])
+                                .bind(|x| unpack_bool(&x))
+                                .bind(|result| eval(if result { &rest[1] } else { &rest[2] }))
+                        } else {
+                            unimplemented!()
+                        }
+                    }
+//                    "car" => {
+//                        if rest.len() == 1 {
+//                            eval(&rest[0])
+//                                .bind(|x| unpack_dotted_list(x))
+//                                .map(|(head, _)| *head)
+//                        } else {
+//                            unimplemented!()
+//                        }
+//                    }
                     func => apply(
                         func,
                         &rest
@@ -229,52 +250,72 @@ pub fn eval(val: &LispVal) -> ThrowsError<LispVal> {
             },
             _ => unimplemented!(),
         },
-        Atom(name) => unimplemented!(),
+        Atom(_name) => unimplemented!(),
         DottedList(_head, _tail) => unimplemented!(),
     }
 }
 
 struct LispFn(Box<dyn Fn(&Vec<LispVal>) -> ThrowsError<LispVal> + Sync>);
-//struct NumBinOp(Box<dyn Fn(i64, i64) -> LispVal + Sync>);
-//struct BoolBinOp(Box<dyn Fn(bool, bool) -> LispVal + Sync>);
-//struct StrBinOp(Box<dyn Fn(&str, &str) -> bool + Sync>);
 
-fn num_bin_op<F>(f: F) -> LispFn where F: Fn(i64, i64) -> ThrowsError<LispVal> + Sync + 'static {
+fn unary_op<F>(f: F) -> LispFn
+    where
+        F: Fn(&LispVal) -> ThrowsError<LispVal> + Sync + 'static,
+{
+    LispFn(Box::new(move |ls| {
+        if ls.len() == 1 {
+            f(&ls[0])
+        } else {
+            Err(NumArgs(1, ls.clone()))
+        }
+    }))
+}
+
+fn bin_op<F>(f: F) -> LispFn
+    where
+        F: Fn(&LispVal, &LispVal) -> ThrowsError<LispVal> + Sync + 'static,
+{
     LispFn(Box::new(move |ls| {
         if ls.len() == 2 {
-            unpack_num(ls.get(0).unwrap()).bind(|x| {
-                unpack_num(ls.get(1).unwrap()).bind(|y| {
-                    f(x, y)
-                })
-            })
+            f(&ls[0], &ls[1])
         } else {
             Err(NumArgs(2, ls.clone()))
         }
     }))
 }
 
-fn bool_bin_op<F>(f: F) -> LispFn where F: Fn(bool, bool) -> ThrowsError<LispVal> + Sync + 'static {
+fn num_bin_op<F>(f: F) -> LispFn
+where
+    F: Fn(i64, i64) -> ThrowsError<LispVal> + Sync + 'static,
+{
     LispFn(Box::new(move |ls| {
         if ls.len() == 2 {
-            unpack_bool(ls.get(0).unwrap()).bind(|x| {
-                unpack_bool(ls.get(1).unwrap()).bind(|y| {
-                    f(x, y)
-                })
-            })
+            unpack_num(&ls[0]).bind(|x| unpack_num(&ls[1]).bind(|y| f(x, y)))
         } else {
             Err(NumArgs(2, ls.clone()))
         }
     }))
 }
 
-fn str_bin_op<F>(f: F) -> LispFn where F: Fn(&str, &str) -> ThrowsError<LispVal> + Sync + 'static {
+fn bool_bin_op<F>(f: F) -> LispFn
+where
+    F: Fn(bool, bool) -> ThrowsError<LispVal> + Sync + 'static,
+{
     LispFn(Box::new(move |ls| {
         if ls.len() == 2 {
-            unpack_str(ls.get(0).unwrap()).bind(|x| {
-                unpack_str(ls.get(1).unwrap()).bind(|y| {
-                    f(x, y)
-                })
-            })
+            unpack_bool(&ls[0]).bind(|x| unpack_bool(&ls[1]).bind(|y| f(x, y)))
+        } else {
+            Err(NumArgs(2, ls.clone()))
+        }
+    }))
+}
+
+fn str_bin_op<F>(f: F) -> LispFn
+where
+    F: Fn(&str, &str) -> ThrowsError<LispVal> + Sync + 'static,
+{
+    LispFn(Box::new(move |ls| {
+        if ls.len() == 2 {
+            unpack_str(&ls[0]).bind(|x| unpack_str(&ls[1]).bind(|y| f(x, y)))
         } else {
             Err(NumArgs(2, ls.clone()))
         }
@@ -287,10 +328,46 @@ lazy_static! {
         m.insert("+", num_bin_op(|x, y| Ok(Number(x + y))));
         m.insert("-", num_bin_op(|x, y| Ok(Number(x - y))));
         m.insert("*", num_bin_op(|x, y| Ok(Number(x * y))));
-        m.insert("/", num_bin_op(|x, y| if y != 0 { Ok(Number(x / y)) } else { Err(DivByZero) }));
-        m.insert("mod", num_bin_op(|x, y| if y != 0 { Ok(Number(x % y)) } else { Err(DivByZero) }));
-        m.insert("quotient", num_bin_op(|x, y| if y != 0 { Ok(Number(x / y)) } else { Err(DivByZero) }));
-        m.insert("remainder", num_bin_op(|x, y| if y != 0 { Ok(Number(x % y)) } else { Err(DivByZero) }));
+        m.insert(
+            "/",
+            num_bin_op(|x, y| {
+                if y != 0 {
+                    Ok(Number(x / y))
+                } else {
+                    Err(DivByZero)
+                }
+            }),
+        );
+        m.insert(
+            "mod",
+            num_bin_op(|x, y| {
+                if y != 0 {
+                    Ok(Number(x % y))
+                } else {
+                    Err(DivByZero)
+                }
+            }),
+        );
+        m.insert(
+            "quotient",
+            num_bin_op(|x, y| {
+                if y != 0 {
+                    Ok(Number(x / y))
+                } else {
+                    Err(DivByZero)
+                }
+            }),
+        );
+        m.insert(
+            "remainder",
+            num_bin_op(|x, y| {
+                if y != 0 {
+                    Ok(Number(x % y))
+                } else {
+                    Err(DivByZero)
+                }
+            }),
+        );
 
         m.insert("=", num_bin_op(|x, y| Ok(Bool(x == y))));
         m.insert("<", num_bin_op(|x, y| Ok(Bool(x < y))));
@@ -307,6 +384,33 @@ lazy_static! {
         m.insert("string>?", str_bin_op(|x, y| Ok(Bool(x > y))));
         m.insert("string<=?", str_bin_op(|x, y| Ok(Bool(x <= y))));
         m.insert("string>=?", str_bin_op(|x, y| Ok(Bool(x >= y))));
+
+        m.insert(
+            "cons",
+            bin_op(|x, y| {
+                Ok(DottedList(Box::new(x.clone()), Box::new(y.clone())))
+            })
+        );
+
+        m.insert(
+            "car",
+            unary_op(|x| {
+                unpack_dotted_list(x)
+                    .map(|(head, _)| head.clone())
+                    .or_else(|_| {
+                        unpack_list(x)
+                            .bind(|ls| {
+                                if ls.len() > 0 {
+                                    Ok(ls[0].clone())
+                                } else {
+                                    Err(Default("car on empty list".to_owned()))
+                                }
+                            })
+                        }
+                    )
+            })
+        );
+
         m
     };
 }
@@ -331,6 +435,20 @@ fn unpack_bool(lispval: &LispVal) -> ThrowsError<bool> {
     match lispval {
         Bool(x) => Ok(x.clone()),
         not_bool => Err(TypeMismatch("bool", not_bool.clone())),
+    }
+}
+
+fn unpack_list(lispval: &LispVal) -> ThrowsError<&Vec<LispVal>> {
+    match lispval {
+        List(ls) => Ok(ls),
+        not_dotted_list => Err(TypeMismatch("dotted list", not_dotted_list.clone()))
+    }
+}
+
+fn unpack_dotted_list(lispval: &LispVal) -> ThrowsError<(&LispVal, &LispVal)> {
+    match lispval {
+        DottedList(head, tail) => Ok((head, tail)),
+        not_dotted_list => Err(TypeMismatch("dotted list", not_dotted_list.clone()))
     }
 }
 
