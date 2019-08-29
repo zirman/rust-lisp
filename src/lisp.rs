@@ -20,6 +20,7 @@ pub enum LispError {
     BadSpecialForm(OwnedString, LispVal),
     NotFunction(&'static str, OwnedString),
     UnboundVar(OwnedString, OwnedString),
+    DivByZero,
     Default(OwnedString),
 }
 
@@ -71,6 +72,7 @@ fn show_error(error: LispError) -> OwnedString {
             .chain(": ".chars())
             .chain(var_name.chars())
             .collect::<OwnedString>(),
+        DivByZero => "Divided by zero".to_owned(),
         Default(_) => "".to_owned(),
     }
 }
@@ -78,6 +80,7 @@ fn show_error(error: LispError) -> OwnedString {
 use crate::Bind;
 use std::collections::HashMap;
 use LispVal::*;
+use std::marker::PhantomData;
 
 pub fn letter() -> impl Parser<char> {
     predicate(|c| c.is_alphabetic())
@@ -231,38 +234,90 @@ pub fn eval(val: &LispVal) -> ThrowsError<LispVal> {
     }
 }
 
-struct BinOp(Box<dyn Fn(i64, i64) -> i64 + Sync>);
+struct LispFn(Box<dyn Fn(&Vec<LispVal>) -> ThrowsError<LispVal> + Sync>);
+//struct NumBinOp(Box<dyn Fn(i64, i64) -> LispVal + Sync>);
+//struct BoolBinOp(Box<dyn Fn(bool, bool) -> LispVal + Sync>);
+//struct StrBinOp(Box<dyn Fn(&str, &str) -> bool + Sync>);
+
+fn num_bin_op<F>(f: F) -> LispFn where F: Fn(i64, i64) -> ThrowsError<LispVal> + Sync + 'static {
+    LispFn(Box::new(move |ls| {
+        if ls.len() == 2 {
+            unpack_num(ls.get(0).unwrap()).bind(|x| {
+                unpack_num(ls.get(1).unwrap()).bind(|y| {
+                    f(x, y)
+                })
+            })
+        } else {
+            Err(NumArgs(2, ls.clone()))
+        }
+    }))
+}
+
+fn bool_bin_op<F>(f: F) -> LispFn where F: Fn(bool, bool) -> ThrowsError<LispVal> + Sync + 'static {
+    LispFn(Box::new(move |ls| {
+        if ls.len() == 2 {
+            unpack_bool(ls.get(0).unwrap()).bind(|x| {
+                unpack_bool(ls.get(1).unwrap()).bind(|y| {
+                    f(x, y)
+                })
+            })
+        } else {
+            Err(NumArgs(2, ls.clone()))
+        }
+    }))
+}
+
+fn str_bin_op<F>(f: F) -> LispFn where F: Fn(&str, &str) -> ThrowsError<LispVal> + Sync + 'static {
+    LispFn(Box::new(move |ls| {
+        if ls.len() == 2 {
+            unpack_str(ls.get(0).unwrap()).bind(|x| {
+                unpack_str(ls.get(1).unwrap()).bind(|y| {
+                    f(x, y)
+                })
+            })
+        } else {
+            Err(NumArgs(2, ls.clone()))
+        }
+    }))
+}
 
 lazy_static! {
-    static ref PRIMITIVES: HashMap<&'static str, BinOp> = {
+    static ref PRIMITIVE_FN: HashMap<&'static str, LispFn> = {
         let mut m = HashMap::new();
-        m.insert("+", BinOp(Box::new(|x, y| x + y)));
-        m.insert("-", BinOp(Box::new(|x, y| x - y)));
-        m.insert("*", BinOp(Box::new(|x, y| x * y)));
-        m.insert("/", BinOp(Box::new(|x, y| x / y)));
-        m.insert("mod", BinOp(Box::new(|x, y| x % y)));
-        m.insert("quotient", BinOp(Box::new(|x, y| x / y)));
-        m.insert("remainder", BinOp(Box::new(|x, y| x % y)));
+        m.insert("+", num_bin_op(|x, y| Ok(Number(x + y))));
+        m.insert("-", num_bin_op(|x, y| Ok(Number(x - y))));
+        m.insert("*", num_bin_op(|x, y| Ok(Number(x * y))));
+        m.insert("/", num_bin_op(|x, y| if y != 0 { Ok(Number(x / y)) } else { Err(DivByZero) }));
+        m.insert("mod", num_bin_op(|x, y| if y != 0 { Ok(Number(x % y)) } else { Err(DivByZero) }));
+        m.insert("quotient", num_bin_op(|x, y| if y != 0 { Ok(Number(x / y)) } else { Err(DivByZero) }));
+        m.insert("remainder", num_bin_op(|x, y| if y != 0 { Ok(Number(x % y)) } else { Err(DivByZero) }));
+
+        m.insert("=", num_bin_op(|x, y| Ok(Bool(x == y))));
+        m.insert("<", num_bin_op(|x, y| Ok(Bool(x < y))));
+        m.insert(">", num_bin_op(|x, y| Ok(Bool(x > y))));
+        m.insert("/=", num_bin_op(|x, y| Ok(Bool(x != y))));
+        m.insert(">=", num_bin_op(|x, y| Ok(Bool(x >= y))));
+        m.insert("<=", num_bin_op(|x, y| Ok(Bool(x <= y))));
+
+        m.insert("&&", bool_bin_op(|x, y| Ok(Bool(x && y))));
+        m.insert("||", bool_bin_op(|x, y| Ok(Bool(x || y))));
+
+        m.insert("string=?", str_bin_op(|x, y| Ok(Bool(x == y))));
+        m.insert("string<?", str_bin_op(|x, y| Ok(Bool(x < y))));
+        m.insert("string>?", str_bin_op(|x, y| Ok(Bool(x > y))));
+        m.insert("string<=?", str_bin_op(|x, y| Ok(Bool(x <= y))));
+        m.insert("string>=?", str_bin_op(|x, y| Ok(Bool(x >= y))));
         m
     };
 }
 
 pub fn apply(s: &str, ls: &Vec<LispVal>) -> ThrowsError<LispVal> {
-    (PRIMITIVES.get(s) as Option<&BinOp>)
+    (PRIMITIVE_FN.get(s) as Option<&LispFn>)
         .ok_or(LispError::NotFunction(
             "Unrecognized primitive function args",
             s.to_owned(),
         ))
-        .bind(|f| numeric_bin_op(f, ls))
-}
-
-fn numeric_bin_op(bin_op: &BinOp, ls: &Vec<LispVal>) -> ThrowsError<LispVal> {
-    if ls.len() == 2 {
-        unpack_num(ls.get(0).unwrap())
-            .bind(|x| unpack_num(ls.get(1).unwrap()).bind(|y| Ok(Number(bin_op.0(x, y)))))
-    } else {
-        Err(NumArgs(2 as u8, ls.clone()))
-    }
+        .bind(|f| f.0(ls))
 }
 
 fn unpack_num(lispval: &LispVal) -> ThrowsError<i64> {
@@ -272,9 +327,29 @@ fn unpack_num(lispval: &LispVal) -> ThrowsError<i64> {
     }
 }
 
+fn unpack_bool(lispval: &LispVal) -> ThrowsError<bool> {
+    match lispval {
+        Bool(x) => Ok(x.clone()),
+        not_bool => Err(TypeMismatch("bool", not_bool.clone())),
+    }
+}
+
+fn unpack_str(lispval: &LispVal) -> ThrowsError<&str> {
+    match lispval {
+        String(x) => Ok(x),
+        not_bool => Err(TypeMismatch("bool", not_bool.clone())),
+    }
+}
+
 pub fn trap_error(action: ThrowsError<OwnedString>) -> ThrowsError<OwnedString> {
     match action {
         Ok(x) => Ok(x),
         Err(y) => Ok(show_error(y)),
     }
 }
+
+// (-> 1 + 2 + 3 + 4)
+// (+ 4 (+ 3 (+ 2 1)))
+// (<- 1 + 2 + 3 + 4)
+// (+ 1 (+ 2 (+ 3 4)))
+// ((+ ((+ 1) 2)) 3)
