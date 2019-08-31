@@ -400,7 +400,7 @@ where
                 xs.push(x);
                 source = source1
             }
-            Err(e) => return Err(e),
+            Err(_) => return Ok((xs, source)),
         }
         loop {
             match ps.parse(source) {
@@ -432,7 +432,7 @@ where
                 xs.push(x);
                 source = source1
             }
-            Err(e) => return Err(e),
+            Err(_) => return Ok((xs, source)),
         }
         match ps.parse(source) {
             Ok((_, source1)) => source = source1,
