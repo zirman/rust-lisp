@@ -5,9 +5,7 @@ use crate::{Bind, BindMut};
 
 type OwnedString = std::string::String;
 
-pub struct LispInterpreter {
-    primitive_fn: HashMap<&'static str, LispFn>,
-}
+pub struct LispInterpreter {}
 
 type LispFn = Box<dyn Fn(&[LispVal]) -> ThrowsError<LispVal> + Sync>;
 
@@ -19,8 +17,37 @@ pub enum LispVal {
     Number(i64),
     String(OwnedString),
     Bool(bool),
-    //Function(LispFn),
+    PrimitiveFn(PrimFn),
 }
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PrimFn {
+    NumAdd,
+    NumSub,
+    NumMul,
+    NumDiv,
+    NumMod,
+    NumQuot,
+    NumRem,
+    NumEq,
+    NumLt,
+    NumGt,
+    NumNe,
+    NumGte,
+    NumLte,
+    BoolAnd,
+    BoolOr,
+    StringEq,
+    StringLt,
+    StringGt,
+    StringLte,
+    StringGte,
+    Cons,
+    Car,
+    Cdr,
+}
+
+use PrimFn::*;
 
 use LispVal::*;
 
@@ -42,107 +69,25 @@ type ThrowsError<A> = Result<A, LispError>;
 
 impl LispInterpreter {
     pub(crate) fn new() -> LispInterpreter {
-        let mut m = HashMap::new();
-        m.insert("+", num_bin_op(|x, y| Ok(Number(x + y))));
-        m.insert("-", num_bin_op(|x, y| Ok(Number(x - y))));
-        m.insert("*", num_bin_op(|x, y| Ok(Number(x * y))));
-        m.insert(
-            "/",
-            num_bin_op(|x, y| {
-                if y != 0 {
-                    Ok(Number(x / y))
-                } else {
-                    Err(DivByZero)
-                }
-            }),
-        );
-        m.insert(
-            "mod",
-            num_bin_op(|x, y| {
-                if y != 0 {
-                    Ok(Number(x % y))
-                } else {
-                    Err(DivByZero)
-                }
-            }),
-        );
-        m.insert(
-            "quotient",
-            num_bin_op(|x, y| {
-                if y != 0 {
-                    Ok(Number(x / y))
-                } else {
-                    Err(DivByZero)
-                }
-            }),
-        );
-        m.insert(
-            "remainder",
-            num_bin_op(|x, y| {
-                if y != 0 {
-                    Ok(Number(x % y))
-                } else {
-                    Err(DivByZero)
-                }
-            }),
-        );
-
-        m.insert("=", num_bin_op(|x, y| Ok(Bool(x == y))));
-        m.insert("<", num_bin_op(|x, y| Ok(Bool(x < y))));
-        m.insert(">", num_bin_op(|x, y| Ok(Bool(x > y))));
-        m.insert("/=", num_bin_op(|x, y| Ok(Bool(x != y))));
-        m.insert(">=", num_bin_op(|x, y| Ok(Bool(x >= y))));
-        m.insert("<=", num_bin_op(|x, y| Ok(Bool(x <= y))));
-
-        m.insert("&&", bool_bin_op(|x, y| Ok(Bool(x && y))));
-        m.insert("||", bool_bin_op(|x, y| Ok(Bool(x || y))));
-
-        m.insert("string=?", str_bin_op(|x, y| Ok(Bool(x == y))));
-        m.insert("string<?", str_bin_op(|x, y| Ok(Bool(x < y))));
-        m.insert("string>?", str_bin_op(|x, y| Ok(Bool(x > y))));
-        m.insert("string<=?", str_bin_op(|x, y| Ok(Bool(x <= y))));
-        m.insert("string>=?", str_bin_op(|x, y| Ok(Bool(x >= y))));
-
-        m.insert(
-            "cons",
-            bin_op(|x, y| Ok(DottedList(Box::new(x.clone()), Box::new(y.clone())))),
-        );
-
-        m.insert(
-            "car",
-            unary_op(|x| {
-                unpack_dotted_list(x)
-                    .map(|(head, _)| head.clone())
-                    .or_else(|_| {
-                        unpack_list_ref(x).bind(|ls| {
-                            if ls.len() > 0 {
-                                Ok(ls[0].clone())
-                            } else {
-                                Err(Default("car on empty list"))
-                            }
-                        })
-                    })
-            }),
-        );
-
-        LispInterpreter { primitive_fn: m }
+        LispInterpreter {}
     }
 
-    pub fn eval(&mut self, lisp_val: &LispVal) -> ThrowsError<LispVal> {
-        match lisp_val {
-            String(_) => Ok(lisp_val.clone()),
-            Number(_) => Ok(lisp_val.clone()),
-            Bool(_) => Ok(lisp_val.clone()),
+    pub fn eval(&mut self, lisp_expr: &LispVal) -> ThrowsError<LispVal> {
+        match lisp_expr {
+            String(_) => Ok(lisp_expr.clone()),
+            Number(_) => Ok(lisp_expr.clone()),
+            Bool(_) => Ok(lisp_expr.clone()),
             List(items) => items
                 .split_first()
                 .ok_or(BadSpecialForm(
                     "Empty function application",
-                    lisp_val.clone(),
+                    lisp_expr.clone(),
                 ))
-                .bind_mut(|(func, rest)| self.apply_form(lisp_val, func, rest)),
-            Atom(name) => Ok(Atom(name.clone())),
-            DottedList(func, args_list) => self.eval_dotted_list(lisp_val, func, args_list),
-            //Function(_) => Ok(val.clone())
+                .bind_mut(|(func, rest)| self.apply_form(lisp_expr, func, rest)),
+            Atom(name) => apply_atom(name).map(PrimitiveFn),
+            DottedList(func, args_list) =>
+                self.eval_dotted_list(lisp_expr, func, args_list),
+            PrimitiveFn(_) => Ok(lisp_expr.clone()),
         }
     }
 
@@ -172,7 +117,7 @@ impl LispInterpreter {
                         Err(BadSpecialForm("if form takes 3 arguments", val.clone()))
                     }
                 }
-                func => {
+                name => {
                     let mut eval_args: Vec<LispVal> = vec![];
 
                     for lisp_val in args.iter() {
@@ -184,20 +129,26 @@ impl LispInterpreter {
                         }
                     }
 
-                    self.apply_fn(func, &eval_args)
+                    apply_atom(name)
+                        .bind(|x| apply_fn(x, &eval_args))
                 }
+            },
+            PrimitiveFn(prim_fn) => {
+                let mut eval_args: Vec<LispVal> = vec![];
+
+                for lisp_val in args.iter() {
+                    match self.eval(lisp_val) {
+                        Ok(arg) => eval_args.push(arg),
+                        Err(lisp_error) => {
+                            return Err(lisp_error);
+                        }
+                    }
+                }
+
+                apply_fn(prim_fn.clone(), &eval_args)
             },
             _ => unimplemented!(),
         }
-    }
-
-    pub fn apply_fn(&mut self, s: &str, ls: &[LispVal]) -> ThrowsError<LispVal> {
-        (self.primitive_fn.get(s))
-            .ok_or(NotFunction(
-                "Unrecognized primitive function args",
-                s.to_owned(),
-            ))
-            .bind(|f| f(ls))
     }
 
     fn eval_dotted_list(
@@ -248,6 +199,66 @@ fn read_expr(source: &str) -> ThrowsError<LispVal> {
     match expr().parse(source) {
         Ok((x, _)) => Ok(x),
         Err(y) => Err(ParseError(y.to_owned())),
+    }
+}
+
+fn apply_fn(prim_fn: PrimFn, ls: &[LispVal]) -> ThrowsError<LispVal> {
+    match prim_fn {
+        NumAdd => num_bin_op(ls, |x, y| Ok(Number(x + y))),
+        NumSub => num_bin_op(ls, |x, y| Ok(Number(x - y))),
+        NumMul => num_bin_op(ls, |x, y| Ok(Number(x * y))),
+        NumDiv => num_bin_op(ls, |x, y| {
+            if y != 0 { Ok(Number(x / y)) } else { Err(DivByZero) }
+        }),
+        NumMod => num_bin_op(ls, |x, y| {
+            if y != 0 { Ok(Number(x % y)) } else { Err(DivByZero) }
+        }),
+        NumQuot => num_bin_op(ls, |x, y| {
+            if y != 0 { Ok(Number(x / y)) } else { Err(DivByZero) }
+        }),
+        NumRem => num_bin_op(ls, |x, y| {
+            if y != 0 { Ok(Number(x % y)) } else { Err(DivByZero) }
+        }),
+        NumEq => num_bin_op(ls, |x, y| Ok(Bool(x == y))),
+        NumLt => num_bin_op(ls, |x, y| Ok(Bool(x < y))),
+        NumGt => num_bin_op(ls, |x, y| Ok(Bool(x > y))),
+        NumNe => num_bin_op(ls, |x, y| Ok(Bool(x != y))),
+        NumGte => num_bin_op(ls, |x, y| Ok(Bool(x >= y))),
+        NumLte => num_bin_op(ls, |x, y| Ok(Bool(x <= y))),
+        BoolAnd => bool_bin_op(ls, |x, y| Ok(Bool(x && y))),
+        BoolOr => bool_bin_op(ls, |x, y| Ok(Bool(x || y))),
+        StringEq => string_bin_op(ls, |x, y| Ok(Bool(x == y))),
+        StringLt => string_bin_op(ls, |x, y| Ok(Bool(x < y))),
+        StringGt => string_bin_op(ls, |x, y| Ok(Bool(x > y))),
+        StringLte => string_bin_op(ls, |x, y| Ok(Bool(x <= y))),
+        StringGte => string_bin_op(ls, |x, y| Ok(Bool(x >= y))),
+        Cons => bin_op(ls, |head, tail| Ok(DottedList(Box::new(head.clone()), Box::new(tail.clone())))),
+        Car => unary_op(ls, |x| {
+            unpack_dotted_list(x)
+                .map(|(head, _)| head.clone())
+                .or_else(|_| {
+                    unpack_list_ref(x).bind(|ls| {
+                        if ls.len() == 1 {
+                            Ok(ls[0].clone())
+                        } else {
+                            Err(NumArgs(1, ls.to_vec()))
+                        }
+                    })
+                })
+        }),
+        Cdr => unary_op(ls, |x| {
+            unpack_dotted_list(x)
+                .map(|(_, tail)| tail.clone())
+                .or_else(|_| {
+                    unpack_list_ref(x).bind(|ls| {
+                        if ls.len() == 1 {
+                            Ok(ls[0].clone())
+                        } else {
+                            Err(NumArgs(1, ls.to_vec()))
+                        }
+                    })
+                })
+        }),
     }
 }
 
@@ -409,73 +420,111 @@ pub fn show_val(val: &LispVal) -> OwnedString {
             .chain(show_val(tail).chars())
             .chain(")".chars())
             .collect(),
-        //Function(_) => format!("function #")
+        PrimitiveFn(prim_fn) => format!("primitive function {:?}", prim_fn),
     }
 }
 
-fn unary_op<F>(f: F) -> LispFn
-where
-    F: Fn(&LispVal) -> ThrowsError<LispVal> + Sync + 'static,
-{
-    Box::new(move |ls: &[LispVal]| {
-        if ls.len() == 1 {
-            f(&ls[0])
-        } else {
-            Err(NumArgs(1, ls.to_vec()))
-        }
-    })
+fn apply_atom(name: &str) -> ThrowsError<PrimFn> {
+    match name {
+        "+" => Ok(NumAdd),
+        "-" => Ok(NumSub),
+        "*" => Ok(NumMul),
+        "/" => Ok(NumDiv),
+        "mod" => Ok(NumMod),
+        "" => Ok(NumQuot),
+        "remainder" => Ok(NumRem),
+        "=" => Ok(NumEq),
+        "<" => Ok(NumLt),
+        ">" => Ok(NumGt),
+        "/=" => Ok(NumNe),
+        ">=" => Ok(NumGte),
+        "<=" => Ok(NumLte),
+        "&&" => Ok(BoolAnd),
+        "||" => Ok(BoolOr),
+        "string=?" => Ok(StringEq),
+        "string<?" => Ok(StringLt),
+        "string>?" => Ok(StringGt),
+        "string<=?" => Ok(StringLte),
+        "string>=?" => Ok(StringGte),
+        "cons" => Ok(Cons),
+        "car" => Ok(Car),
+        "cdr" => Ok(Cdr),
+        _ => Err(NotFunction("not a function", name.to_owned())),
+    }
 }
 
-fn bin_op<F>(f: F) -> LispFn
-where
-    F: Fn(&LispVal, &LispVal) -> ThrowsError<LispVal> + Sync + 'static,
+fn unary_op<F>(args: &[LispVal], f: F) -> ThrowsError<LispVal>
+    where
+        F: Fn(&LispVal) -> ThrowsError<LispVal>,
 {
-    Box::new(move |ls: &[LispVal]| {
-        if ls.len() == 2 {
-            f(&ls[0], &ls[1])
-        } else {
-            Err(NumArgs(2, ls.to_vec()))
-        }
-    })
+    if args.len() == 1 {
+        f(&args[0])
+    } else {
+        Err(NumArgs(2, args.to_vec()))
+    }
 }
 
-fn num_bin_op<F>(f: F) -> LispFn
-where
-    F: Fn(i64, i64) -> ThrowsError<LispVal> + Sync + 'static,
+fn bin_op<F>(args: &[LispVal], f: F) -> ThrowsError<LispVal>
+    where
+        F: Fn(&LispVal, &LispVal) -> ThrowsError<LispVal>,
 {
-    Box::new(move |ls: &[LispVal]| {
-        if ls.len() == 2 {
-            unpack_num(&ls[0]).bind(|x| unpack_num(&ls[1]).bind(|y| f(x, y)))
-        } else {
-            Err(NumArgs(2, ls.to_vec()))
-        }
-    })
+    if args.len() == 2 {
+        f(&args[0], &args[1])
+    } else {
+        Err(NumArgs(2, args.to_vec()))
+    }
 }
 
-fn bool_bin_op<F>(f: F) -> LispFn
-where
-    F: Fn(bool, bool) -> ThrowsError<LispVal> + Sync + 'static,
+fn num_bin_op<F>(args: &[LispVal], f: F) -> ThrowsError<LispVal>
+    where
+        F: Fn(i64, i64) -> ThrowsError<LispVal>,
 {
-    Box::new(move |ls: &[LispVal]| {
-        if ls.len() == 2 {
-            unpack_bool(&ls[0]).bind(|x| unpack_bool(&ls[1]).bind(|y| f(x, y)))
-        } else {
-            Err(NumArgs(2, ls.to_vec()))
-        }
-    })
+    if args.len() == 2 {
+        unpack_num(&args[0]).bind(|x| {
+            unpack_num(&args[1]).bind(|y| {
+                f(x, y)
+            })
+        })
+    } else {
+        Err(NumArgs(2, args.to_vec()))
+    }
 }
 
-fn str_bin_op<F>(f: F) -> LispFn
-where
-    F: Fn(&str, &str) -> ThrowsError<LispVal> + Sync + 'static,
+fn bool_bin_op<F>(args: &[LispVal], f: F) -> ThrowsError<LispVal>
+    where
+        F: Fn(bool, bool) -> ThrowsError<LispVal>,
 {
-    Box::new(move |ls: &[LispVal]| {
-        if ls.len() == 2 {
-            unpack_str(&ls[0]).bind(|x| unpack_str(&ls[1]).bind(|y| f(x, y)))
-        } else {
-            Err(NumArgs(2, ls.to_vec()))
-        }
-    })
+    if args.len() == 2 {
+        unpack_bool(&args[0]).bind(|x| {
+            unpack_bool(&args[1]).bind(|y| {
+                f(x,y)
+            })
+        })
+    } else {
+        Err(NumArgs(2, args.to_vec()))
+    }
+}
+
+fn string_bin_op<F>(args: &[LispVal], f: F) -> ThrowsError<LispVal>
+    where
+        F: Fn(&str, &str) -> ThrowsError<LispVal>,
+{
+    if args.len() == 2 {
+        unpack_str(&args[0]).bind(|x| {
+            unpack_str(&args[1]).bind(|y| {
+                f(x, y)
+            })
+        })
+    } else {
+        Err(NumArgs(2, args.to_vec()))
+    }
+}
+
+fn unpack_atom(lisp_val: &LispVal) -> ThrowsError<OwnedString> {
+    match lisp_val {
+        Atom(name) => Ok(name.clone()),
+        not_atom => Err(TypeMismatch("atom", not_atom.clone())),
+    }
 }
 
 fn unpack_num(lisp_val: &LispVal) -> ThrowsError<i64> {
