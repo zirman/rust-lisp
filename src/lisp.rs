@@ -13,37 +13,7 @@ pub enum LispVal {
     Number(i64),
     String(OwnedString),
     Bool(bool),
-    PrimitiveFn(PrimFn),
 }
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum PrimFn {
-    NumAdd,
-    NumSub,
-    NumMul,
-    NumDiv,
-    NumMod,
-    NumQuot,
-    NumRem,
-    NumEq,
-    NumLt,
-    NumGt,
-    NumNe,
-    NumGte,
-    NumLte,
-    BoolAnd,
-    BoolOr,
-    StringEq,
-    StringLt,
-    StringGt,
-    StringLte,
-    StringGte,
-    Cons,
-    Car,
-    Cdr,
-}
-
-use PrimFn::*;
 
 use LispVal::*;
 
@@ -76,10 +46,15 @@ impl LispInterpreter {
             List(items) => items
                 .split_first()
                 .ok_or_else(|| BadSpecialForm("Empty function application", lisp_expr.clone()))
-                .bind_mut(|(func, rest)| self.apply_form(lisp_expr, func, rest)),
-            Atom(name) => apply_atom(name).map(PrimitiveFn),
-            DottedList(func, args_list) => self.eval_dotted_list(lisp_expr, func, args_list),
-            PrimitiveFn(_) => Ok(lisp_expr.clone()),
+                .bind_mut(|(func, rest)| {
+                    self.eval(func)
+                        .bind_mut(|func: LispVal| self.apply_form(lisp_expr, &func, rest))
+                }),
+            Atom(name) => apply_atom(name),
+            //(quote . ((+ . (1 . (2 . ()))) . ()))
+            DottedList(func, args_list) => self
+                .eval(func)
+                .bind_mut(|func| self.eval_dotted_list(lisp_expr, &func, args_list)),
         }
     }
 
@@ -109,27 +84,24 @@ impl LispInterpreter {
                         Err(BadSpecialForm("if form takes 3 arguments", val.clone()))
                     }
                 }
-                name => self.eval_args(args).bind(|eval_args: Vec<LispVal>| {
-                    apply_atom(name).bind(|x: PrimFn| apply_fn(x, &eval_args))
-                }),
+                name => self
+                    .eval_args(args)
+                    .bind(|eval_args: Vec<LispVal>| apply_fn(name, &eval_args)),
             },
-            PrimitiveFn(prim_fn) => self
-                .eval_args(args)
-                .bind(|eval_args: Vec<LispVal>| apply_fn(prim_fn.clone(), &eval_args)),
             _ => unimplemented!(),
         }
     }
 
     fn eval_dotted_list(
         &mut self,
-        val: &LispVal,
+        lisp_expr: &LispVal,
         func: &LispVal,
         args_list: &LispVal,
     ) -> ThrowsError<LispVal> {
-        self.eval(func).bind_mut(|func: LispVal| {
-            self.eval_dotted_list_tail(vec![], args_list.to_owned())
-                .bind_mut(|args: Vec<LispVal>| self.apply_form(val, &func, &args))
-        })
+        match self.eval_dotted_list_tail(vec![], args_list.to_owned()) {
+            Ok(x) => self.apply_form(lisp_expr, func, &x),
+            Err(e) => Err(e),
+        }
     }
 
     fn eval_dotted_list_tail(
@@ -139,22 +111,13 @@ impl LispInterpreter {
     ) -> ThrowsError<Vec<LispVal>> {
         match tail {
             List(xs) => {
-                //TODO
-                ls.extend(
-                    xs.into_iter()
-                        .map(|x: LispVal| self.eval(&x))
-                        .map(extract_value)
-                        .collect::<Vec<LispVal>>(),
-                );
+                ls.extend(xs);
                 Ok(ls)
             }
-            DottedList(head, tail) => match self.eval(head.as_ref()) {
-                Ok(x) => {
-                    ls.push(x);
-                    self.eval_dotted_list_tail(ls, *tail)
-                }
-                Err(e) => Err(e),
-            },
+            DottedList(head, tail) => {
+                ls.push(*head);
+                self.eval_dotted_list_tail(ls, *tail)
+            }
             _ => Err(Default("non args")),
         }
     }
@@ -173,10 +136,6 @@ impl LispInterpreter {
 
         Ok(eval_args)
     }
-}
-
-pub fn extract_value<A>(throws_error: ThrowsError<A>) -> A {
-    throws_error.expect("")
 }
 
 pub fn read_expr(source: &str) -> ThrowsError<LispVal> {
@@ -237,33 +196,34 @@ where
     }
 }
 
-fn apply_fn(prim_fn: PrimFn, args: &[LispVal]) -> ThrowsError<LispVal> {
+fn apply_fn(prim_fn: &str, args: &[LispVal]) -> ThrowsError<LispVal> {
     match prim_fn {
-        NumAdd => binary_op(unpack_num_op(pack_num_op(|x: i64, y: i64| x + y)))(args),
-        NumSub => binary_op(unpack_num_op(pack_num_op(|x: i64, y: i64| x - y)))(args),
-        NumMul => binary_op(unpack_num_op(pack_num_op(|x: i64, y: i64| x * y)))(args),
-        NumDiv => binary_op(unpack_num_op(div_op(|x: i64, y: i64| x / y)))(args),
-        NumMod => binary_op(unpack_num_op(div_op(|x: i64, y: i64| x % y)))(args),
-        NumQuot => binary_op(unpack_num_op(div_op(|x: i64, y: i64| x / y)))(args),
-        NumRem => binary_op(unpack_num_op(div_op(|x: i64, y: i64| x % y)))(args),
-        NumEq => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x == y)))(args),
-        NumLt => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x < y)))(args),
-        NumGt => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x > y)))(args),
-        NumNe => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x != y)))(args),
-        NumGte => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x >= y)))(args),
-        NumLte => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x <= y)))(args),
-        BoolAnd => binary_op(unpack_bool_op(pack_bool_op(|x: bool, y: bool| x && y)))(args),
-        BoolOr => binary_op(unpack_bool_op(pack_bool_op(|x: bool, y: bool| x || y)))(args),
-        StringEq => binary_op(string_to_bool_op(|x: &str, y: &str| x == y))(args),
-        StringLt => binary_op(string_to_bool_op(|x: &str, y: &str| x < y))(args),
-        StringGt => binary_op(string_to_bool_op(|x: &str, y: &str| x > y))(args),
-        StringLte => binary_op(string_to_bool_op(|x: &str, y: &str| x <= y))(args),
-        StringGte => binary_op(string_to_bool_op(|x: &str, y: &str| x >= y))(args),
-        Cons => binary_op(|head: &LispVal, tail: &LispVal| {
+        "+" => binary_op(unpack_num_op(pack_num_op(|x: i64, y: i64| x + y)))(args),
+        "-" => binary_op(unpack_num_op(pack_num_op(|x: i64, y: i64| x - y)))(args),
+        "*" => binary_op(unpack_num_op(pack_num_op(|x: i64, y: i64| x * y)))(args),
+        "/" => binary_op(unpack_num_op(div_op(|x: i64, y: i64| x / y)))(args),
+        "%" => binary_op(unpack_num_op(div_op(|x: i64, y: i64| x % y)))(args),
+        "quotient" => binary_op(unpack_num_op(div_op(|x: i64, y: i64| x / y)))(args),
+        "remainder" => binary_op(unpack_num_op(div_op(|x: i64, y: i64| x % y)))(args),
+        "=" => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x == y)))(args),
+        "<" => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x < y)))(args),
+        ">" => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x > y)))(args),
+        "/=" => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x != y)))(args),
+        ">=" => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x >= y)))(args),
+        "<=" => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x <= y)))(args),
+        "&&" => binary_op(unpack_bool_op(pack_bool_op(|x: bool, y: bool| x && y)))(args),
+        "||" => binary_op(unpack_bool_op(pack_bool_op(|x: bool, y: bool| x || y)))(args),
+        "string=?" => binary_op(string_to_bool_op(|x: &str, y: &str| x == y))(args),
+        "string<?" => binary_op(string_to_bool_op(|x: &str, y: &str| x < y))(args),
+        "string>?" => binary_op(string_to_bool_op(|x: &str, y: &str| x > y))(args),
+        "string<=?" => binary_op(string_to_bool_op(|x: &str, y: &str| x <= y))(args),
+        "string>=?" => binary_op(string_to_bool_op(|x: &str, y: &str| x >= y))(args),
+        "cons" => binary_op(|head: &LispVal, tail: &LispVal| {
             Ok(DottedList(Box::new(head.clone()), Box::new(tail.clone())))
         })(args),
-        Car => unary_op(list_op(|(head, _)| head.clone()))(args),
-        Cdr => unary_op(list_op(|(_, tail)| tail.clone()))(args),
+        "car" => unary_op(list_op(|(head, _)| head.clone()))(args),
+        "cdr" => unary_op(list_op(|(_, tail)| tail.clone()))(args),
+        _ => Err(NotFunction("", prim_fn.to_owned())),
     }
 }
 
@@ -425,37 +385,39 @@ pub fn show_val(val: &LispVal) -> OwnedString {
             .chain(show_val(tail).chars())
             .chain(")".chars())
             .collect(),
-        PrimitiveFn(prim_fn) => format!("primitive function {:?}", prim_fn),
     }
 }
 
-fn apply_atom(name: &str) -> ThrowsError<PrimFn> {
+fn apply_atom(name: &str) -> ThrowsError<LispVal> {
     match name {
-        "+" => Ok(NumAdd),
-        "-" => Ok(NumSub),
-        "*" => Ok(NumMul),
-        "/" => Ok(NumDiv),
-        "mod" => Ok(NumMod),
-        "" => Ok(NumQuot),
-        "remainder" => Ok(NumRem),
-        "=" => Ok(NumEq),
-        "<" => Ok(NumLt),
-        ">" => Ok(NumGt),
-        "/=" => Ok(NumNe),
-        ">=" => Ok(NumGte),
-        "<=" => Ok(NumLte),
-        "&&" => Ok(BoolAnd),
-        "||" => Ok(BoolOr),
-        "string=?" => Ok(StringEq),
-        "string<?" => Ok(StringLt),
-        "string>?" => Ok(StringGt),
-        "string<=?" => Ok(StringLte),
-        "string>=?" => Ok(StringGte),
-        "cons" => Ok(Cons),
-        "car" => Ok(Car),
-        "cdr" => Ok(Cdr),
+        "quote" => Ok(()),
+        "if" => Ok(()),
+        "+" => Ok(()),
+        "-" => Ok(()),
+        "*" => Ok(()),
+        "/" => Ok(()),
+        "mod" => Ok(()),
+        "" => Ok(()),
+        "remainder" => Ok(()),
+        "=" => Ok(()),
+        "<" => Ok(()),
+        ">" => Ok(()),
+        "/=" => Ok(()),
+        ">=" => Ok(()),
+        "<=" => Ok(()),
+        "&&" => Ok(()),
+        "||" => Ok(()),
+        "string=?" => Ok(()),
+        "string<?" => Ok(()),
+        "string>?" => Ok(()),
+        "string<=?" => Ok(()),
+        "string>=?" => Ok(()),
+        "cons" => Ok(()),
+        "car" => Ok(()),
+        "cdr" => Ok(()),
         _ => Err(NotFunction("not a function", name.to_owned())),
     }
+    .map(|_| Atom(name.to_owned()))
 }
 
 fn list_op<F>(f: F) -> impl Fn(&LispVal) -> ThrowsError<LispVal>
