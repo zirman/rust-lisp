@@ -60,7 +60,7 @@ impl LispInterpreter {
 
     fn apply_form(
         &mut self,
-        val: &LispVal,
+        lisp_expr: &LispVal,
         func: &LispVal,
         args: &[LispVal],
     ) -> ThrowsError<LispVal> {
@@ -70,7 +70,7 @@ impl LispInterpreter {
                     if args.len() == 1 {
                         Ok(args[0].clone())
                     } else {
-                        Err(BadSpecialForm("quote form takes 1 argument", val.clone()))
+                        Err(BadSpecialForm("quote form takes 1 argument", lisp_expr.clone()))
                     }
                 }
                 "if" => {
@@ -81,14 +81,21 @@ impl LispInterpreter {
                                 self.eval(if predicate { &args[1] } else { &args[2] })
                             })
                     } else {
-                        Err(BadSpecialForm("if form takes 3 arguments", val.clone()))
+                        Err(BadSpecialForm("if form takes 3 arguments", lisp_expr.clone()))
                     }
                 }
                 name => self
                     .eval_args(args)
-                    .bind(|eval_args: Vec<LispVal>| apply_fn(name, &eval_args)),
-            },
-            _ => unimplemented!(),
+                    .bind(|eval_args: Vec<LispVal>| apply_fn( name, &eval_args)),
+            }
+            List(func) => {
+                let mut l = func.clone();
+                l.extend(args.into_iter().cloned());
+                self.eval(&List(l))
+            }
+            _ => {
+                unimplemented!()
+            }
         }
     }
 
@@ -99,8 +106,12 @@ impl LispInterpreter {
         args_list: &LispVal,
     ) -> ThrowsError<LispVal> {
         match self.eval_dotted_list_tail(vec![], args_list.to_owned()) {
-            Ok(x) => self.apply_form(lisp_expr, func, &x),
-            Err(e) => Err(e),
+            Ok(x) => {
+                self.apply_form(lisp_expr, func, &x)
+            }
+            Err(e) => {
+                Err(e)
+            }
         }
     }
 
@@ -196,34 +207,34 @@ where
     }
 }
 
-fn apply_fn(prim_fn: &str, args: &[LispVal]) -> ThrowsError<LispVal> {
-    match prim_fn {
-        "+" => binary_op(unpack_num_op(pack_num_op(|x: i64, y: i64| x + y)))(args),
-        "-" => binary_op(unpack_num_op(pack_num_op(|x: i64, y: i64| x - y)))(args),
-        "*" => binary_op(unpack_num_op(pack_num_op(|x: i64, y: i64| x * y)))(args),
-        "/" => binary_op(unpack_num_op(div_op(|x: i64, y: i64| x / y)))(args),
-        "%" => binary_op(unpack_num_op(div_op(|x: i64, y: i64| x % y)))(args),
-        "quotient" => binary_op(unpack_num_op(div_op(|x: i64, y: i64| x / y)))(args),
-        "remainder" => binary_op(unpack_num_op(div_op(|x: i64, y: i64| x % y)))(args),
-        "=" => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x == y)))(args),
-        "<" => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x < y)))(args),
-        ">" => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x > y)))(args),
-        "/=" => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x != y)))(args),
-        ">=" => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x >= y)))(args),
-        "<=" => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x <= y)))(args),
-        "&&" => binary_op(unpack_bool_op(pack_bool_op(|x: bool, y: bool| x && y)))(args),
-        "||" => binary_op(unpack_bool_op(pack_bool_op(|x: bool, y: bool| x || y)))(args),
-        "string=?" => binary_op(string_to_bool_op(|x: &str, y: &str| x == y))(args),
-        "string<?" => binary_op(string_to_bool_op(|x: &str, y: &str| x < y))(args),
-        "string>?" => binary_op(string_to_bool_op(|x: &str, y: &str| x > y))(args),
-        "string<=?" => binary_op(string_to_bool_op(|x: &str, y: &str| x <= y))(args),
-        "string>=?" => binary_op(string_to_bool_op(|x: &str, y: &str| x >= y))(args),
+fn apply_fn(func: &str, args: &[LispVal]) -> ThrowsError<LispVal> {
+    match func {
+        "+" => binary_op(unpack_num_op(pack_num_op(|x: i64, y: i64| x + y)))(func, args),
+        "-" => binary_op(unpack_num_op(pack_num_op(|x: i64, y: i64| x - y)))(func, args),
+        "*" => binary_op(unpack_num_op(pack_num_op(|x: i64, y: i64| x * y)))(func, args),
+        "/" => binary_op(unpack_num_op(div_op(|x: i64, y: i64| x / y)))(func, args),
+        "%" => binary_op(unpack_num_op(div_op(|x: i64, y: i64| x % y)))(func, args),
+        "quotient" => binary_op(unpack_num_op(div_op(|x: i64, y: i64| x / y)))(func, args),
+        "remainder" => binary_op(unpack_num_op(div_op(|x: i64, y: i64| x % y)))(func, args),
+        "=" => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x == y)))(func, args),
+        "<" => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x < y)))(func, args),
+        ">" => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x > y)))(func, args),
+        "/=" => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x != y)))(func, args),
+        ">=" => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x >= y)))(func, args),
+        "<=" => binary_op(unpack_num_op(pack_bool_op(|x: i64, y: i64| x <= y)))(func, args),
+        "&&" => binary_op(unpack_bool_op(pack_bool_op(|x: bool, y: bool| x && y)))(func, args),
+        "||" => binary_op(unpack_bool_op(pack_bool_op(|x: bool, y: bool| x || y)))(func, args),
+        "string=?" => binary_op(string_to_bool_op(|x: &str, y: &str| x == y))(func, args),
+        "string<?" => binary_op(string_to_bool_op(|x: &str, y: &str| x < y))(func, args),
+        "string>?" => binary_op(string_to_bool_op(|x: &str, y: &str| x > y))(func, args),
+        "string<=?" => binary_op(string_to_bool_op(|x: &str, y: &str| x <= y))(func, args),
+        "string>=?" => binary_op(string_to_bool_op(|x: &str, y: &str| x >= y))(func, args),
         "cons" => binary_op(|head: &LispVal, tail: &LispVal| {
             Ok(DottedList(Box::new(head.clone()), Box::new(tail.clone())))
-        })(args),
+        })(func, args),
         "car" => unary_op(list_op(|(head, _)| head.clone()))(args),
         "cdr" => unary_op(list_op(|(_, tail)| tail.clone()))(args),
-        _ => Err(NotFunction("", prim_fn.to_owned())),
+        _ => Err(NotFunction("", func.to_owned())),
     }
 }
 
@@ -450,15 +461,20 @@ where
     }
 }
 
-fn binary_op<F>(f: F) -> impl Fn(&[LispVal]) -> ThrowsError<LispVal>
+fn binary_op<F>(f: F) -> impl Fn(&str, &[LispVal]) -> ThrowsError<LispVal>
 where
     F: Fn(&LispVal, &LispVal) -> ThrowsError<LispVal>,
 {
-    move |args: &[LispVal]| {
-        if args.len() == 2 {
+    move |func, args: &[LispVal]| {
+        if args.len() > 2 {
+            Err(NumArgs(2, args.to_vec()))
+        }
+        else if args.len() == 2 {
             f(&args[0], &args[1])
         } else {
-            Err(NumArgs(2, args.to_vec()))
+            let mut ls = vec![Atom(func.to_owned())];
+            ls.extend(args.into_iter().cloned());
+            Ok(List(ls))
         }
     }
 }
