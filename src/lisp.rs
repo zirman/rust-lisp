@@ -5,6 +5,15 @@ type OwnedString = std::string::String;
 
 pub struct LispInterpreter {}
 
+//TODO: unquote
+//TODO: define
+//TODO: lambda
+//TODO: product type
+//TODO: sum type
+//TODO: type checking
+//TODO: define-macro
+//TODO: pattern matching
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum LispVal {
     Atom(OwnedString),
@@ -54,7 +63,44 @@ impl LispInterpreter {
             //(quote . ((+ . (1 . (2 . ()))) . ()))
             DottedList(func, args_list) => self
                 .eval(func)
-                .bind_mut(|func| self.eval_dotted_list(lisp_expr, &func, args_list)),
+                .bind_mut(|func| collapse_dotted_list(func, args_list).bind_mut(|x| self.eval(&x))),
+        }
+    }
+
+    fn apply_quote(&mut self, lisp_val: &LispVal) -> ThrowsError<LispVal> {
+        match lisp_val {
+            List(ls) => {
+                if ls.len() > 0 {
+                    match &ls[0] {
+                        Atom(name) => {
+                            if name == "unquote" {
+                                if ls.len() == 2 {
+                                    self.eval(&ls[1])
+                                } else {
+                                    Err(BadSpecialForm("unquote takes 1 argument", lisp_val.clone()))
+                                }
+                            } else {
+                                map_err_mut(ls, |x| self.apply_quote(&x))
+                                    .map(|x| List(x))
+                            }
+                        }
+                        _ => {
+                            map_err_mut(ls, |x| self.apply_quote(&x))
+                                .map(|x| List(x))
+                        }
+                    }
+                } else {
+                    Ok(lisp_val.clone())
+                }
+            }
+            DottedList(head, tail) => {
+                collapse_dotted_list(*head.clone(), tail).bind_mut(| lisp_val| {
+                    self.apply_quote(&lisp_val)
+                })
+            }
+            _ => {
+                Ok(lisp_val.clone())
+            }
         }
     }
 
@@ -68,9 +114,12 @@ impl LispInterpreter {
             Atom(x) => match x.as_ref() {
                 "quote" => {
                     if args.len() == 1 {
-                        Ok(args[0].clone())
+                        self.apply_quote(&args[0])
                     } else {
-                        Err(BadSpecialForm("quote form takes 1 argument", lisp_expr.clone()))
+                        Err(BadSpecialForm(
+                            "quote form takes 1 argument",
+                            lisp_expr.clone(),
+                        ))
                     }
                 }
                 "if" => {
@@ -81,61 +130,27 @@ impl LispInterpreter {
                                 self.eval(if predicate { &args[1] } else { &args[2] })
                             })
                     } else {
-                        Err(BadSpecialForm("if form takes 3 arguments", lisp_expr.clone()))
+                        Err(BadSpecialForm(
+                            "if form takes 3 arguments",
+                            lisp_expr.clone(),
+                        ))
                     }
                 }
                 name => self
                     .eval_args(args)
-                    .bind(|eval_args: Vec<LispVal>| apply_fn( name, &eval_args)),
-            }
+                    .bind(|eval_args: Vec<LispVal>| apply_fn(name, &eval_args)),
+            },
             List(func) => {
-                let mut l = func.clone();
-                l.extend(args.into_iter().cloned());
-                self.eval(&List(l))
+                let mut ls = func.clone();
+                ls.extend(args.into_iter().cloned());
+                self.eval(&List(ls))
             }
-            _ => {
-                unimplemented!()
-            }
-        }
-    }
-
-    fn eval_dotted_list(
-        &mut self,
-        lisp_expr: &LispVal,
-        func: &LispVal,
-        args_list: &LispVal,
-    ) -> ThrowsError<LispVal> {
-        match self.eval_dotted_list_tail(vec![], args_list.to_owned()) {
-            Ok(x) => {
-                self.apply_form(lisp_expr, func, &x)
-            }
-            Err(e) => {
-                Err(e)
-            }
-        }
-    }
-
-    fn eval_dotted_list_tail(
-        &mut self,
-        mut ls: Vec<LispVal>,
-        tail: LispVal,
-    ) -> ThrowsError<Vec<LispVal>> {
-        match tail {
-            List(xs) => {
-                ls.extend(xs);
-                Ok(ls)
-            }
-            DottedList(head, tail) => {
-                ls.push(*head);
-                self.eval_dotted_list_tail(ls, *tail)
-            }
-            _ => Err(Default("non args")),
+            _ => unimplemented!(),
         }
     }
 
     fn eval_args(&mut self, args: &[LispVal]) -> ThrowsError<Vec<LispVal>> {
         let mut eval_args: Vec<LispVal> = vec![];
-
         for lisp_val in args.iter() {
             match self.eval(lisp_val) {
                 Ok(arg) => eval_args.push(arg),
@@ -144,8 +159,26 @@ impl LispInterpreter {
                 }
             }
         }
-
         Ok(eval_args)
+    }
+}
+
+fn collapse_dotted_list(head: LispVal, mut tail: &LispVal) -> ThrowsError<LispVal> {
+    let mut ls: Vec<LispVal> = vec![head];
+    loop {
+        match tail {
+            List(lisp_vals) => {
+                ls.extend(lisp_vals.clone());
+                return Ok(List(ls));
+            }
+            DottedList(head, next_tail) => {
+                ls.push(*head.clone());
+                tail = &next_tail;
+            }
+            _ => {
+                return Err(Default("non args"));
+            }
+        }
     }
 }
 
@@ -347,6 +380,12 @@ pub fn quoted() -> impl Parser<LispVal> {
         .fmap(|x: LispVal| List(vec![Atom("quote".to_owned()), x]))
 }
 
+pub fn unquoted() -> impl Parser<LispVal> {
+    pchar(',')
+        .next(expr())
+        .fmap(|x: LispVal| List(vec![Atom("unquote".to_owned()), x]))
+}
+
 pub fn expr() -> LispExprParser {
     LispExprParser {}
 }
@@ -360,6 +399,7 @@ impl Parser<LispVal> for LispExprParser {
             .or(string())
             .or(number())
             .or(quoted())
+            .or(unquoted())
             .or(pchar('(').next(dotted_list().or(list())).prev(pchar(')')))
             .parse(source)
     }
@@ -466,15 +506,15 @@ where
     F: Fn(&LispVal, &LispVal) -> ThrowsError<LispVal>,
 {
     move |func, args: &[LispVal]| {
-        if args.len() > 2 {
-            Err(NumArgs(2, args.to_vec()))
-        }
-        else if args.len() == 2 {
+        let args_len = args.len();
+        if args_len == 2 {
             f(&args[0], &args[1])
-        } else {
+        } else if args_len < 2 {
             let mut ls = vec![Atom(func.to_owned())];
             ls.extend(args.into_iter().cloned());
             Ok(List(ls))
+        } else {
+            Err(NumArgs(2, args.to_vec()))
         }
     }
 }
@@ -528,4 +568,21 @@ pub fn trap_error(action: ThrowsError<OwnedString>) -> ThrowsError<OwnedString> 
         Ok(x) => Ok(x),
         Err(y) => Ok(show_error(y)),
     }
+}
+
+//TODO: Rollback changes on error
+fn map_err_mut<F>(iter: &[LispVal], mut f: F) -> ThrowsError<Vec<LispVal>>
+      where F: FnMut(&LispVal) -> ThrowsError<LispVal>, {
+    let mut lisp_vals = vec![];
+    for lisp_val in iter {
+        match f(&lisp_val) {
+            Ok(result) => {
+                lisp_vals.push(result)
+            }
+            Err(err) => {
+                return Err(err)
+            }
+        }
+    }
+    Ok(lisp_vals)
 }
