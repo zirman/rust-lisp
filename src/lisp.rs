@@ -5,7 +5,6 @@ type OwnedString = std::string::String;
 
 pub struct LispInterpreter {}
 
-//TODO: unquote
 //TODO: define
 //TODO: lambda
 //TODO: product type
@@ -136,8 +135,7 @@ impl LispInterpreter {
                         ))
                     }
                 }
-                name => self
-                    .eval_args(args)
+                name => map_err_mut(args, |x| self.eval(x))
                     .bind(|eval_args: Vec<LispVal>| apply_fn(name, &eval_args)),
             },
             List(func) => {
@@ -147,19 +145,6 @@ impl LispInterpreter {
             }
             _ => unimplemented!(),
         }
-    }
-
-    fn eval_args(&mut self, args: &[LispVal]) -> ThrowsError<Vec<LispVal>> {
-        let mut eval_args: Vec<LispVal> = vec![];
-        for lisp_val in args.iter() {
-            match self.eval(lisp_val) {
-                Ok(arg) => eval_args.push(arg),
-                Err(lisp_error) => {
-                    return Err(lisp_error);
-                }
-            }
-        }
-        Ok(eval_args)
     }
 }
 
