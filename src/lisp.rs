@@ -1,11 +1,14 @@
+use std::collections::HashMap;
+
 use crate::parse::*;
 use crate::{Bind, BindMut};
 
 type OwnedString = std::string::String;
 
-pub struct LispInterpreter {}
+pub struct LispInterpreter {
+    variables: HashMap<OwnedString, LispVal>,
+}
 
-//TODO: define
 //TODO: lambda
 //TODO: product type
 //TODO: sum type
@@ -43,7 +46,9 @@ type ThrowsError<A> = Result<A, LispError>;
 
 impl LispInterpreter {
     pub fn new() -> LispInterpreter {
-        LispInterpreter {}
+        LispInterpreter {
+            variables: HashMap::new(),
+        }
     }
 
     pub fn eval(&mut self, lisp_expr: &LispVal) -> ThrowsError<LispVal> {
@@ -58,48 +63,10 @@ impl LispInterpreter {
                     self.eval(func)
                         .bind_mut(|func: LispVal| self.apply_form(lisp_expr, &func, rest))
                 }),
-            Atom(name) => apply_atom(name),
-            //(quote . ((+ . (1 . (2 . ()))) . ()))
+            Atom(name) => self.apply_atom(name),
             DottedList(func, args_list) => self
                 .eval(func)
                 .bind_mut(|func| collapse_dotted_list(func, args_list).bind_mut(|x| self.eval(&x))),
-        }
-    }
-
-    fn apply_quote(&mut self, lisp_val: &LispVal) -> ThrowsError<LispVal> {
-        match lisp_val {
-            List(ls) => {
-                if ls.len() > 0 {
-                    match &ls[0] {
-                        Atom(name) => {
-                            if name == "unquote" {
-                                if ls.len() == 2 {
-                                    self.eval(&ls[1])
-                                } else {
-                                    Err(BadSpecialForm("unquote takes 1 argument", lisp_val.clone()))
-                                }
-                            } else {
-                                map_err_mut(ls, |x| self.apply_quote(&x))
-                                    .map(|x| List(x))
-                            }
-                        }
-                        _ => {
-                            map_err_mut(ls, |x| self.apply_quote(&x))
-                                .map(|x| List(x))
-                        }
-                    }
-                } else {
-                    Ok(lisp_val.clone())
-                }
-            }
-            DottedList(head, tail) => {
-                collapse_dotted_list(*head.clone(), tail).bind_mut(| lisp_val| {
-                    self.apply_quote(&lisp_val)
-                })
-            }
-            _ => {
-                Ok(lisp_val.clone())
-            }
         }
     }
 
@@ -135,6 +102,21 @@ impl LispInterpreter {
                         ))
                     }
                 }
+                "define" => {
+                    if args.len() == 2 {
+                        unpack_atom(&args[0]).bind_mut(|name| {
+                            self.eval(&args[1]).bind_mut(|lisp_val| {
+                                self.variables.insert(name.to_owned(), lisp_val);
+                                Ok(List(vec![]))
+                            })
+                        })
+                    } else {
+                        Err(BadSpecialForm(
+                            "define form takes 2 arguments",
+                            lisp_expr.clone(),
+                        ))
+                    }
+                }
                 name => map_err_mut(args, |x| self.eval(x))
                     .bind(|eval_args: Vec<LispVal>| apply_fn(name, &eval_args)),
             },
@@ -144,6 +126,73 @@ impl LispInterpreter {
                 self.eval(&List(ls))
             }
             _ => unimplemented!(),
+        }
+    }
+
+    fn apply_quote(&mut self, lisp_val: &LispVal) -> ThrowsError<LispVal> {
+        match lisp_val {
+            List(ls) => {
+                if ls.len() > 0 {
+                    match &ls[0] {
+                        Atom(name) => {
+                            if name == "unquote" {
+                                if ls.len() == 2 {
+                                    self.eval(&ls[1])
+                                } else {
+                                    Err(BadSpecialForm(
+                                        "unquote takes 1 argument",
+                                        lisp_val.clone(),
+                                    ))
+                                }
+                            } else {
+                                map_err_mut(ls, |x| self.apply_quote(&x)).map(|x| List(x))
+                            }
+                        }
+                        _ => map_err_mut(ls, |x| self.apply_quote(&x)).map(|x| List(x)),
+                    }
+                } else {
+                    Ok(lisp_val.clone())
+                }
+            }
+            DottedList(head, tail) => collapse_dotted_list(*head.clone(), tail)
+                .bind_mut(|lisp_val| self.apply_quote(&lisp_val)),
+            _ => Ok(lisp_val.clone()),
+        }
+    }
+
+    fn apply_atom(&mut self, name: &str) -> ThrowsError<LispVal> {
+        match self.variables.get(name) {
+            Some(lisp_val) => Ok(lisp_val.clone()),
+            None => match name {
+                "quote" => Ok(()),
+                "if" => Ok(()),
+                "define" => Ok(()),
+                "+" => Ok(()),
+                "-" => Ok(()),
+                "*" => Ok(()),
+                "/" => Ok(()),
+                "%" => Ok(()),
+                "quotient" => Ok(()),
+                "remainder" => Ok(()),
+                "=" => Ok(()),
+                "<" => Ok(()),
+                ">" => Ok(()),
+                "/=" => Ok(()),
+                ">=" => Ok(()),
+                "<=" => Ok(()),
+                "&&" => Ok(()),
+                "||" => Ok(()),
+                "string=?" => Ok(()),
+                "string<?" => Ok(()),
+                "string>?" => Ok(()),
+                "string<=?" => Ok(()),
+                "string>=?" => Ok(()),
+                "cons" => Ok(()),
+                "car" => Ok(()),
+                "cdr" => Ok(()),
+                _ => Err(NotFunction("not a function", name.to_owned())),
+            }
+            .map(|_| Atom(name.to_owned())),
         }
     }
 }
@@ -424,38 +473,6 @@ pub fn show_val(val: &LispVal) -> OwnedString {
     }
 }
 
-fn apply_atom(name: &str) -> ThrowsError<LispVal> {
-    match name {
-        "quote" => Ok(()),
-        "if" => Ok(()),
-        "+" => Ok(()),
-        "-" => Ok(()),
-        "*" => Ok(()),
-        "/" => Ok(()),
-        "mod" => Ok(()),
-        "" => Ok(()),
-        "remainder" => Ok(()),
-        "=" => Ok(()),
-        "<" => Ok(()),
-        ">" => Ok(()),
-        "/=" => Ok(()),
-        ">=" => Ok(()),
-        "<=" => Ok(()),
-        "&&" => Ok(()),
-        "||" => Ok(()),
-        "string=?" => Ok(()),
-        "string<?" => Ok(()),
-        "string>?" => Ok(()),
-        "string<=?" => Ok(()),
-        "string>=?" => Ok(()),
-        "cons" => Ok(()),
-        "car" => Ok(()),
-        "cdr" => Ok(()),
-        _ => Err(NotFunction("not a function", name.to_owned())),
-    }
-    .map(|_| Atom(name.to_owned()))
-}
-
 fn list_op<F>(f: F) -> impl Fn(&LispVal) -> ThrowsError<LispVal>
 where
     F: Fn((&LispVal, &LispVal)) -> LispVal + Copy,
@@ -527,6 +544,13 @@ fn unpack_bool(lisp_val: &LispVal) -> ThrowsError<bool> {
     }
 }
 
+fn unpack_atom(lisp_val: &LispVal) -> ThrowsError<&str> {
+    match lisp_val {
+        Atom(name) => Ok(name),
+        not_bool => Err(TypeMismatch("bool", not_bool.clone())),
+    }
+}
+
 fn unpack_list_ref(lisp_val: &LispVal) -> ThrowsError<&[LispVal]> {
     match lisp_val {
         List(ls) => Ok(ls),
@@ -557,16 +581,14 @@ pub fn trap_error(action: ThrowsError<OwnedString>) -> ThrowsError<OwnedString> 
 
 //TODO: Rollback changes on error
 fn map_err_mut<F>(iter: &[LispVal], mut f: F) -> ThrowsError<Vec<LispVal>>
-      where F: FnMut(&LispVal) -> ThrowsError<LispVal>, {
+where
+    F: FnMut(&LispVal) -> ThrowsError<LispVal>,
+{
     let mut lisp_vals = vec![];
     for lisp_val in iter {
         match f(&lisp_val) {
-            Ok(result) => {
-                lisp_vals.push(result)
-            }
-            Err(err) => {
-                return Err(err)
-            }
+            Ok(result) => lisp_vals.push(result),
+            Err(err) => return Err(err),
         }
     }
     Ok(lisp_vals)
