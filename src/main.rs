@@ -1,14 +1,14 @@
 mod bind;
 mod lisp;
+mod lisp_parse;
 mod parse;
 
+use crate::bind::BindMut;
+use crate::lisp::{read_expr, show_val, trap_error, LispContext};
 use std::io::{self, BufRead};
 
-use bind::*;
-use lisp::*;
-
 fn main() {
-    let mut lisp_interpreter = LispInterpreter::new();
+    let mut lisp_interpreter = LispContext::new();
 
     for line_err in io::stdin().lock().lines() {
         let result_str = trap_error(

@@ -1,73 +1,14 @@
-use std::collections::HashMap;
+use std::borrow::Borrow;
+use std::collections::BTreeMap;
+use std::mem::swap;
 use std::rc::Rc;
 
-use crate::parse::*;
-use crate::{Bind, BindMut};
+use crate::lisp_parse::expr;
+use crate::parse::Parser;
 
-type OwnedString = std::string::String;
-
-// TODO: let special form isolation
-// TODO: break apart and cleanup
-// TODO: optimization
-
-// TODO: tail-call optimization
-// TODO: def-macro
-// TODO: product type
-// TODO: sum type
-// TODO: pattern matching
-// TODO: type checking
-// TODO: polymorphism
-
-#[derive(Clone, Debug, PartialEq)]
-pub enum Lexical {
-    Void,
-    Scope {
-        map: HashMap<OwnedString, LispVal>,
-        next: Rc<Lexical>,
-    }
-}
-
-impl Lexical {
-    fn lookup(&self, name: &str) -> Option<&LispVal> {
-        let mut lexical = self;
-        loop {
-            match lexical {
-                Lexical::Void => {
-                    return None;
-                }
-                Lexical::Scope {map, next}=> {
-                    if let Some(lisp_val) = map.get(name) {
-                        return Some(lisp_val);
-                    } else {
-                        lexical = next.borrow();
-                    }
-                }
-            }
-        }
-    }
-    fn add(&mut self, name: OwnedString, lisp_val: LispVal) {
-        match self {
-            Lexical::Void => {
-                unimplemented!();
-            }
-            Lexical::Scope {map,next: _} => {
-                map.insert(name, lisp_val);
-            }
-        }
-    }
-    fn push(&mut self) -> Rc<Lexical> {
-        // TODO: not use double swap
-        let mut lexical = Lexical::Void;
-        swap(self, &mut lexical);
-        let next = Rc::new(lexical);
-        swap(self, &mut Lexical::Scope { map: HashMap::new(), next: next.clone() });
-        next
-    }
-}
-
-pub struct LispInterpreter {
-    variables: Lexical,
-}
+use LispError::*;
+use LispVal::*;
+use crate::bind::{BindMut, Bind};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum LispVal {
@@ -77,10 +18,13 @@ pub enum LispVal {
     Number(i64),
     String(OwnedString),
     Bool(bool),
-    LispFn(Rc<Lexical>, OwnedString, Vec<OwnedString>, Vec<LispVal>)
+    LispFn(
+        Rc<LispContext>,
+        OwnedString,
+        Vec<OwnedString>,
+        Rc<Vec<LispVal>>,
+    ),
 }
-
-use LispVal::*;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum LispError {
@@ -94,53 +38,116 @@ pub enum LispError {
     Default(&'static str),
 }
 
-use LispError::*;
-use std::borrow::Borrow;
-use std::mem::swap;
-
 type ThrowsError<A> = Result<A, LispError>;
 
-impl LispInterpreter {
-    pub fn new() -> LispInterpreter {
-        LispInterpreter {
-            variables: Lexical::Scope {
-                map: HashMap::new(),
-                next: Rc::new(Lexical::Void)
+pub type OwnedString = std::string::String;
+
+// TODO: break apart and cleanup
+// TODO: let special form isolation
+// TODO: infix notation
+// TODO: optimization
+// TODO: Stack Machine
+
+// TODO: tail-call optimization
+// TODO: def-macro
+// TODO: product type
+// TODO: sum type
+// TODO: pattern matching
+// TODO: type checking
+// TODO: polymorphism
+// TODO: Input/Output
+// [+]
+// (let x 10)
+// [+, 10]
+// (let y (fn (x y) (+ x y)))
+// [+, 10, (fn (x y) (+ x y))]
+// (let z (y x x))
+// [+, 10, (fn (x y) (+ x y)), 20]
+
+// > (let q 10)
+// [10] #[q => s[0]]
+// > (let r (fn r (x y) (+ r q)))
+// [10, (fn r (x) (+ s[-1] s[0]))] #[q => s[0]]
+// [(if (<= s[1] 0) x (s[0] (- s[1] 1))))] s=0
+// > (r 2) => (s[0] 2) => [(if (<= s[1] 0) x (s[0] (- s[1] 1)))), (if (<= s[1] 0) x (s[0] (- s[1] 1)))), 2] eval s[1]
+// [(if (<= s[1] 0) x (s[0] (- s[1] 1)))), (if (<= s[1] 0) x (s[0] (- s[1] 1)))), 2]
+// [(fn r (x) (if (<= x 0) x (r (- x 1)))), 2] eval (if (if (<= x 0) x (r (-x 1))))
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum LispContext {
+    Void,
+    Scope {
+        map: BTreeMap<OwnedString, LispVal>,
+        next: Rc<LispContext>,
+    },
+}
+
+impl LispContext {
+    pub fn new() -> LispContext {
+        LispContext::Scope {
+            map: BTreeMap::new(),
+            next: Rc::new(LispContext::Void),
+        }
+    }
+    pub fn new_next(next: Rc<LispContext>) -> LispContext {
+        LispContext::Scope {
+            map: BTreeMap::new(),
+            next,
+        }
+    }
+    fn lookup(&self, name: &str) -> Option<&LispVal> {
+        let mut lexical = self;
+        loop {
+            match lexical {
+                LispContext::Void => {
+                    return None;
+                }
+                LispContext::Scope { map, next } => {
+                    if let Some(lisp_val) = map.get(name) {
+                        return Some(lisp_val);
+                    } else {
+                        lexical = next.borrow();
+                    }
+                }
             }
         }
+    }
+    fn add(&mut self, name: OwnedString, lisp_val: LispVal) {
+        match self {
+            LispContext::Void => {
+                unimplemented!();
+            }
+            LispContext::Scope { map, next: _ } => {
+                map.insert(name, lisp_val);
+            }
+        }
+    }
+    fn push(&mut self) -> Rc<LispContext> {
+        // TODO: not use double swap
+        let mut lexical = LispContext::Void;
+        swap(self, &mut lexical);
+        let next = Rc::new(lexical);
+        swap(self, &mut LispContext::new_next(next.clone()));
+        next
     }
 
     pub fn eval(&mut self, lisp_expr: &LispVal) -> ThrowsError<LispVal> {
         match lisp_expr {
-            String(_) => {
-                Ok(lisp_expr.clone())
-            }
-            Number(_) => {
-                Ok(lisp_expr.clone())
-            }
-            Bool(_) => {
-                Ok(lisp_expr.clone())
-            }
-            List(items) => {
-                items
-                    .split_first()
-                    .ok_or_else(|| BadSpecialForm("Empty function application", lisp_expr.clone()))
-                    .bind_mut(|(func, rest)| {
-                        self.eval(func)
-                            .bind_mut(|func: LispVal| self.apply_form(lisp_expr, &func, rest))
-                    })
-            }
-            Atom(name) => {
-                self.apply_atom(name)
-            }
-            DottedList(func, args_list) => {
-                self
-                    .eval(func)
-                    .bind_mut(|func| collapse_dotted_list(func, args_list).bind_mut(|x| self.eval(&x)))
-            }
-            LispFn(_, _, _, _) => {
-                Ok(lisp_expr.clone())
-            }
+            String(_) => Ok(lisp_expr.clone()),
+            Number(_) => Ok(lisp_expr.clone()),
+            Bool(_) => Ok(lisp_expr.clone()),
+            List(items) => items
+                .split_first()
+                .ok_or_else(|| BadSpecialForm("Empty function application", lisp_expr.clone()))
+                .bind_mut(|(func, rest)| {
+                    self.eval(func)
+                        .bind_mut(|func: LispVal| self.apply_form(lisp_expr, &func, rest))
+                }),
+            Atom(name) => self.apply_atom(name),
+            DottedList(func, args_list) => self
+                .eval(func)
+                .bind_mut(|func| collapse_dotted_list(func, args_list).bind_mut(|x| self.eval(&x))),
+            LispFn(_, _, _, _) => Ok(lisp_expr.clone()),
         }
     }
 
@@ -180,7 +187,7 @@ impl LispInterpreter {
                     if args.len() == 2 {
                         unpack_atom(&args[0]).bind_mut(|name| {
                             self.eval(&args[1]).bind_mut(|lisp_val| {
-                                self.variables.add(name.to_owned(), lisp_val);
+                                self.add(name.to_owned(), lisp_val);
                                 Ok(List(vec![]))
                             })
                         })
@@ -193,14 +200,18 @@ impl LispInterpreter {
                 }
                 "fn" => {
                     if args.len() >= 3 {
-                        unpack_atom(&args[0])
-                            .bind_mut(|name| {
-                                unpack_list_ref(&args[1])
-                                    .bind(unpack_list_of_atoms)
-                                    .bind_mut(|parameter_names| {
-                                        Ok(LispFn(self.variables.push(), name.to_owned(), parameter_names, args[2..].to_vec()))
-                                    })
-                            })
+                        unpack_atom(&args[0]).bind_mut(|name| {
+                            unpack_list_ref(&args[1])
+                                .bind(unpack_list_of_atoms)
+                                .bind_mut(|parameter_names| {
+                                    Ok(LispFn(
+                                        self.push(),
+                                        name.to_owned(),
+                                        parameter_names,
+                                        Rc::new(args[2..].to_vec()),
+                                    ))
+                                })
+                        })
                     } else {
                         Err(BadSpecialForm(
                             "fn form takes 2 or more arguments",
@@ -221,33 +232,42 @@ impl LispInterpreter {
                 if args.len() > parameter_names.len() {
                     Err(Default("too many args"))
                 } else {
-                    map_err_mut(args, |x| self.eval(x))
-                        .bind_mut(|args| {
-                            let mut lexical = Lexical::Scope { map: HashMap::new(), next: scope.clone() };
-                            lexical.add(name.clone(), LispFn(scope.clone(), name.clone(), parameter_names.clone(), body.clone()));
-                            for i in 0..args.len() {
-                                lexical.add(parameter_names[i].clone(), args[i].clone());
-                            }
-                            if args.len() < parameter_names.len() {
-                                Ok(LispFn(Rc::new(lexical), name.to_owned(), parameter_names[args.len()..].to_vec(), body.clone()))
-                            } else {
-                                let mut intr = LispInterpreter {
-                                    variables: lexical
-                                };
-                                if body.len() > 0 {
-                                    let mut i = 0;
-                                    loop {
-                                        let result = intr.eval(&body[i]);
-                                        if i >= body.len() - 1 || result.is_err() {
-                                            break result;
-                                        }
-                                        i += 1;
+                    map_err_mut(args, |x| self.eval(x)).bind_mut(|args| {
+                        let mut lexical = LispContext::new_next(scope.clone());
+                        lexical.add(
+                            name.clone(),
+                            LispFn(
+                                scope.clone(),
+                                name.clone(),
+                                parameter_names.clone(),
+                                body.clone(),
+                            ),
+                        );
+                        for i in 0..args.len() {
+                            lexical.add(parameter_names[i].clone(), args[i].clone());
+                        }
+                        if args.len() < parameter_names.len() {
+                            Ok(LispFn(
+                                Rc::new(lexical),
+                                name.to_owned(),
+                                parameter_names[args.len()..].to_vec(),
+                                body.clone(),
+                            ))
+                        } else {
+                            if body.len() > 0 {
+                                let mut i = 0;
+                                loop {
+                                    let result = lexical.eval(&body[i]);
+                                    if i >= body.len() - 1 || result.is_err() {
+                                        break result;
                                     }
-                                } else {
-                                    Err(Default("no body"))
+                                    i += 1;
                                 }
+                            } else {
+                                Err(Default("no body"))
                             }
-                        })
+                        }
+                    })
                 }
             }
             _ => unimplemented!(),
@@ -286,7 +306,7 @@ impl LispInterpreter {
     }
 
     fn apply_atom(&mut self, name: &str) -> ThrowsError<LispVal> {
-        if let Some(lisp_val) = self.variables.lookup(name) {
+        if let Some(lisp_val) = self.lookup(name) {
             Ok(lisp_val.clone())
         } else {
             // primitive functions atoms eval to their name
@@ -320,7 +340,7 @@ impl LispInterpreter {
                 "cdr" => Ok(()),
                 _ => Err(NotFunction("not a function", name.to_owned())),
             }
-                .map(|_| Atom(name.to_owned()))
+            .map(|_| Atom(name.to_owned()))
         }
     }
 }
@@ -471,140 +491,6 @@ fn show_error(error: LispError) -> OwnedString {
     }
 }
 
-pub fn letter() -> impl Parser<char> {
-    predicate(|c| c.is_alphabetic())
-}
-
-pub fn symbol() -> impl Parser<char> {
-    one_of("!#$%&|*+-/:<=>?@^_~")
-}
-
-pub fn digit() -> impl Parser<char> {
-    predicate(|c| c.is_ascii_digit())
-}
-
-pub fn spaces() -> impl Parser<()> {
-    skip_many1(predicate(|c| c.is_whitespace()))
-}
-
-pub fn string() -> impl Parser<LispVal> {
-    pchar('"')
-        .next(many(none_of("\"")))
-        .fmap(|cs| cs.into_iter().collect::<OwnedString>())
-        .prev(pchar('"'))
-        .fmap(String)
-}
-
-pub fn atom() -> impl Parser<LispVal> {
-    letter()
-        .or(symbol())
-        .bind(|first| {
-            many(letter().or(digit()).or(symbol()))
-                .fmap(move |rest| vec![first].into_iter().chain(rest))
-        })
-        .fmap(|x| x.collect::<OwnedString>())
-        .fmap(|s| match s.as_ref() {
-            "#t" => Bool(true),
-            "#f" => Bool(false),
-            _ => Atom(s),
-        })
-}
-
-pub fn number() -> impl Parser<LispVal> {
-    many1(predicate(|c| c.is_numeric())).fmap(|x| {
-        Number(
-            x.into_iter()
-                .collect::<OwnedString>()
-                .parse::<i64>()
-                .unwrap(),
-        )
-    })
-}
-
-pub fn list() -> impl Parser<LispVal> {
-    sep_by(expr(), spaces()).fmap(List)
-}
-
-pub fn dotted_list() -> impl Parser<LispVal> {
-    expr().bind(|head| {
-        spaces()
-            .next(pchar('.'))
-            .next(spaces())
-            .next(expr())
-            .fmap(Box::new)
-            .fmap(move |tail: Box<LispVal>| DottedList(Box::new(head.clone()), tail))
-    })
-}
-
-pub fn quoted() -> impl Parser<LispVal> {
-    pchar('\'')
-        .next(expr())
-        .fmap(|x: LispVal| List(vec![Atom("quote".to_owned()), x]))
-}
-
-pub fn unquoted() -> impl Parser<LispVal> {
-    pchar(',')
-        .next(expr())
-        .fmap(|x: LispVal| List(vec![Atom("unquote".to_owned()), x]))
-}
-
-pub fn expr() -> LispExprParser {
-    LispExprParser {}
-}
-
-#[derive(Clone)]
-pub struct LispExprParser {}
-
-impl Parser<LispVal> for LispExprParser {
-    fn parse<'a, 'b>(&'a self, source: &'b str) -> Res<'b, LispVal> {
-        atom()
-            .or(string())
-            .or(number())
-            .or(quoted())
-            .or(unquoted())
-            .or(pchar('(').next(dotted_list().or(list())).prev(pchar(')')))
-            .parse(source)
-    }
-}
-
-fn lisp_vals_to_string(items: &[LispVal]) -> OwnedString {
-    items
-        .into_iter()
-        .map(show_val)
-        .collect::<Vec<OwnedString>>()
-        .join(" ")
-}
-
-pub fn show_val(val: &LispVal) -> OwnedString {
-    match val {
-        String(contents) => "\""
-            .chars()
-            .chain(contents.chars())
-            .chain("\"".chars())
-            .collect(),
-        Atom(name) => (*name).clone(),
-        Number(contents) => format!("{}", contents).to_owned(),
-        Bool(true) => "#t".to_owned(),
-        Bool(false) => "#f".to_owned(),
-        List(items) => "("
-            .chars()
-            .chain(lisp_vals_to_string(items).chars())
-            .chain(")".chars())
-            .collect(),
-        DottedList(head, tail) => "("
-            .chars()
-            .chain(show_val(head).chars())
-            .chain(" . ".chars())
-            .chain(show_val(tail).chars())
-            .chain(")".chars())
-            .collect(),
-        LispFn(scope, name, head, body) => {
-            // TODO: make prettier
-            "#fn ".chars().collect()
-        }
-    }
-}
-
 fn list_op<F>(f: F) -> impl Fn(&LispVal) -> ThrowsError<LispVal>
 where
     F: Fn((&LispVal, &LispVal)) -> LispVal + Copy,
@@ -694,12 +580,8 @@ fn unpack_list_of_atoms(lisp_vals: &[LispVal]) -> ThrowsError<Vec<OwnedString>> 
     let mut v = vec![];
     for lisp_val in lisp_vals {
         match lisp_val {
-            Atom(name) => {
-                v.push(name.to_owned())
-            }
-            _ => {
-                return Err(Default("only atoms allowed"))
-            }
+            Atom(name) => v.push(name.to_owned()),
+            _ => return Err(Default("only atoms allowed")),
         }
     }
     Ok(v)
@@ -739,4 +621,42 @@ where
         }
     }
     Ok(lisp_vals)
+}
+
+pub fn lisp_vals_to_string(items: &[LispVal]) -> OwnedString {
+    items
+        .into_iter()
+        .map(show_val)
+        .collect::<Vec<OwnedString>>()
+        .join(" ")
+}
+
+pub fn show_val(val: &LispVal) -> OwnedString {
+    match val {
+        String(contents) => "\""
+            .chars()
+            .chain(contents.chars())
+            .chain("\"".chars())
+            .collect(),
+        Atom(name) => (*name).clone(),
+        Number(contents) => format!("{}", contents).to_owned(),
+        Bool(true) => "#t".to_owned(),
+        Bool(false) => "#f".to_owned(),
+        List(items) => "("
+            .chars()
+            .chain(lisp_vals_to_string(items).chars())
+            .chain(")".chars())
+            .collect(),
+        DottedList(head, tail) => "("
+            .chars()
+            .chain(show_val(head).chars())
+            .chain(" . ".chars())
+            .chain(show_val(tail).chars())
+            .chain(")".chars())
+            .collect(),
+        LispFn(_scope, _name, _head, _body) => {
+            // TODO: make prettier
+            "#fn ".chars().collect()
+        }
+    }
 }
