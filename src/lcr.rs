@@ -57,7 +57,9 @@ enum LcrPrimitive {
 
 #[derive(Clone, Debug, PartialEq)]
 enum LCR {
+    // TODO: Make If take vectors of predicates and consequences
     If(Box<LCR>, Box<LCR>, Box<LCR>),
+    // TODO: Make Apply take vectors of arguments
     Apply(Box<LCR>, Box<LCR>),
     Recur(Box<LCR>),
     Primitive(LcrPrimitive),
@@ -298,24 +300,19 @@ fn eval(lcr: &LCR, context: &LcrContext) -> ThrowsError<LcrPrimitive> {
 
 fn eval_tco(mut lcr: *const LCR, mut context: *const LcrContext) -> ThrowsError<LcrPrimitive> {
     let mut cleanup = false;
+    let mut lcr_root: *const LCR = lcr;
     loop {
         let x = match unsafe { &*lcr } {
             LCR::If(predicate, consequent, alternative) => {
                 match eval_tco(predicate.borrow(), context) {
                     Ok(x) => match x {
                         LcrPrimitive::Bool(p) => {
-                            let lcr_tmp = Rc::into_raw(Rc::new((if p { consequent } else { alternative }.borrow() as &LCR).clone()));
-                            if cleanup {
-                                unsafe {
-                                    Rc::from_raw(lcr);
-                                }
-                            } else {
+                            if !cleanup {
                                 cleanup = true;
+                                lcr_root = lcr;
                             }
-                            lcr = lcr_tmp;
-
+                            lcr = if p { consequent } else { alternative }.borrow();
                             continue;
-//                            eval_tco(, context)
                         }
                         _ => Err(LispError::Default("expected bool")),
                     },
@@ -335,12 +332,13 @@ fn eval_tco(mut lcr: *const LCR, mut context: *const LcrContext) -> ThrowsError<
                                             let context_tmp = Box::into_raw(Box::new(closure));
                                             if cleanup {
                                                 unsafe {
-                                                    Rc::from_raw(lcr);
+                                                    Rc::from_raw(lcr_root);
                                                     Box::from_raw(context as *mut LcrContext);
                                                 }
                                             } else {
                                                 cleanup = true;
                                             }
+                                            lcr_root = lcr_tmp;
                                             lcr = lcr_tmp;
                                             context = context_tmp;
                                             continue;
@@ -356,12 +354,13 @@ fn eval_tco(mut lcr: *const LCR, mut context: *const LcrContext) -> ThrowsError<
                                             let context_tmp = Box::into_raw(Box::new(vec![]));
                                             if cleanup {
                                                 unsafe {
-                                                    Rc::from_raw(lcr);
+                                                    Rc::from_raw(lcr_root);
                                                     Box::from_raw(context as *mut LcrContext);
                                                 }
                                             } else {
                                                 cleanup = true;
                                             }
+                                            lcr_root = lcr_tmp;
                                             lcr = lcr_tmp;
                                             context = context_tmp;
                                             continue;
@@ -549,12 +548,13 @@ fn eval_tco(mut lcr: *const LCR, mut context: *const LcrContext) -> ThrowsError<
                                 let context_tmp = Box::into_raw(Box::new(closure));
                                 if cleanup {
                                     unsafe {
-                                        Rc::from_raw(lcr);
+                                        Rc::from_raw(lcr_root);
                                         Box::from_raw(context as *mut LcrContext);
                                     }
                                 } else {
                                     cleanup = true;
                                 }
+                                lcr_root = lcr_tmp;
                                 lcr = lcr_tmp;
                                 context = context_tmp;
                                 continue;
@@ -575,40 +575,38 @@ fn eval_tco(mut lcr: *const LCR, mut context: *const LcrContext) -> ThrowsError<
         };
         if cleanup {
             unsafe {
-                Rc::from_raw(lcr);
+                Rc::from_raw(lcr_root);
                 Box::from_raw(context as *mut LcrContext);
             }
-        } else {
-            cleanup = true;
         }
         return x;
     }
 }
 
 pub fn foo() {
-//    let closure = LCR::Primitive(LcrPrimitive::RecClosure(
-//        2,
-//        Rc::new(LCR::If(
-//            Box::new(LCR::Apply(
-//                Box::new(LCR::Primitive(LcrPrimitive::CurryLTE(9999999))),
-//                Box::new(LCR::Lookup(1)),
-//            )),
-//            Box::new(LCR::Lookup(1)),
-//            Box::new(LCR::Recur(Box::new(LCR::Apply(
-//                Box::new(LCR::Primitive(LcrPrimitive::CurryAdd(1))),
-//                Box::new(LCR::Lookup(1)),
-//            )))),
-//        )),
-//    ));
-//    println!("{:?}", unsafe {
-//        eval_tco(
-//            &LCR::Apply(
-//                Box::new(LCR::Apply(Box::new(closure.clone()), Box::new(closure))),
-//                Box::new(LCR::Primitive(LcrPrimitive::I32(0))),
-//            ),
-//            &Vec::with_capacity(0),
-//        )
-//    });
+    //    let closure = LCR::Primitive(LcrPrimitive::RecClosure(
+    //        2,
+    //        Rc::new(LCR::If(
+    //            Box::new(LCR::Apply(
+    //                Box::new(LCR::Primitive(LcrPrimitive::CurryLTE(9999999))),
+    //                Box::new(LCR::Lookup(1)),
+    //            )),
+    //            Box::new(LCR::Lookup(1)),
+    //            Box::new(LCR::Recur(Box::new(LCR::Apply(
+    //                Box::new(LCR::Primitive(LcrPrimitive::CurryAdd(1))),
+    //                Box::new(LCR::Lookup(1)),
+    //            )))),
+    //        )),
+    //    ));
+    //    println!("{:?}", unsafe {
+    //        eval_tco(
+    //            &LCR::Apply(
+    //                Box::new(LCR::Apply(Box::new(closure.clone()), Box::new(closure))),
+    //                Box::new(LCR::Primitive(LcrPrimitive::I32(0))),
+    //            ),
+    //            &Vec::with_capacity(0),
+    //        )
+    //    });
     //    (fn fib (x) (if (<= x 1) x (+ x (fib (- x 2)) (fib (- x 1)))))
     let closure = LCR::Primitive(LcrPrimitive::RecClosure(
         2,
