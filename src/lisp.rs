@@ -3,12 +3,12 @@ use std::collections::BTreeMap;
 use std::mem::swap;
 use std::rc::Rc;
 
+use crate::bind::{Bind, BindMut};
 use crate::lisp_parse::expr;
 use crate::parse::Parser;
 
 use LispError::*;
 use LispVal::*;
-use crate::bind::{BindMut, Bind};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum LispVal {
@@ -38,7 +38,7 @@ pub enum LispError {
     Default(&'static str),
 }
 
-type ThrowsError<A> = Result<A, LispError>;
+pub type ThrowsError<A> = Result<A, LispError>;
 
 pub type OwnedString = std::string::String;
 
