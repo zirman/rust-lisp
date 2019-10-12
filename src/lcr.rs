@@ -612,7 +612,7 @@ pub fn foo() {
         2,
         Rc::new(LCR::If(
             Box::new(LCR::Apply(
-                Box::new(LCR::Primitive(LcrPrimitive::CurryGTE(2))),
+                Box::new(LCR::Primitive(LcrPrimitive::CurryGTE(1))),
                 Box::new(LCR::Lookup(1)),
             )),
             Box::new(LCR::Lookup(1)),
